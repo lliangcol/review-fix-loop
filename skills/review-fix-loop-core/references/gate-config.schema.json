@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Fix Loop Gate Config",
+  "type": "object",
+  "required": ["version", "modes", "slices", "gates"],
+  "properties": {
+    "version": { "const": 1 },
+    "rule_files": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "modes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["scope"],
+        "properties": {
+          "baseline": { "type": "string" },
+          "scope": {
+            "type": "array",
+            "items": {
+              "enum": ["staged", "unstaged", "untracked", "merge_base_to_head", "all"]
+            }
+          }
+        }
+      }
+    },
+    "slices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "paths"],
+        "properties": {
+          "id": { "type": "string" },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "risk": { "enum": ["low", "medium", "high"] }
+        }
+      }
+    },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "argv", "scope"],
+        "properties": {
+          "id": { "type": "string" },
+          "argv": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "command": { "type": "string" },
+          "scope": {
+            "enum": ["staged", "unstaged", "untracked", "merge_base_to_head", "all"]
+          },
+          "when_paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "modes": {
+            "type": "array",
+            "items": { "enum": ["normal_loop", "large_merge"] }
+          },
+          "filter_mode": { "enum": ["added", "diff_context", "file", "nofilter"] },
+          "fail_level": { "enum": ["none", "info", "warning", "error"] },
+          "blocking": { "type": "boolean" },
+          "timeout_seconds": { "type": "integer", "minimum": 1 },
+          "final_always": { "type": "boolean" },
+          "parser": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "enum": ["exit-code", "git-diff-check", "regex-lines", "json-diagnostics"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

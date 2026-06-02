@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "rule_files": ["adapters/project-template/SKILL.md"],
+  "modes": {
+    "normal_loop": {
+      "scope": ["staged", "unstaged", "untracked"],
+      "require_fresh_snapshot": true
+    },
+    "large_merge": {
+      "baseline": "origin/main",
+      "scope": ["merge_base_to_head", "staged", "unstaged", "untracked"],
+      "require_risk_slices": true,
+      "require_invariant_checks": true,
+      "require_residual_risk_report": true,
+      "max_deep_review_files": 80,
+      "max_diff_bytes_per_slice": 250000
+    }
+  },
+  "slices": [
+    {
+      "id": "source",
+      "paths": ["src/**", "lib/**"],
+      "risk": "high"
+    },
+    {
+      "id": "docs",
+      "paths": ["docs/**", "README.md"],
+      "risk": "medium"
+    },
+    {
+      "id": "tests",
+      "paths": ["tests/**"],
+      "risk": "medium"
+    },
+    {
+      "id": "tools",
+      "paths": ["tools/**", "scripts/**"],
+      "risk": "medium"
+    }
+  ],
+  "gates": [
+    {
+      "id": "working-tree-whitespace",
+      "argv": ["git", "diff", "--check"],
+      "command": "git diff --check",
+      "scope": "unstaged",
+      "filter_mode": "diff_context",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "staged-whitespace",
+      "argv": ["git", "diff", "--cached", "--check"],
+      "command": "git diff --cached --check",
+      "scope": "staged",
+      "filter_mode": "diff_context",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "branch-whitespace",
+      "argv": ["git", "diff", "--check", "{merge_base}..HEAD"],
+      "command": "git diff --check {merge_base}..HEAD",
+      "scope": "merge_base_to_head",
+      "modes": ["large_merge"],
+      "filter_mode": "diff_context",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 120,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "untracked-whitespace",
+      "argv": ["__builtin__:untracked-whitespace"],
+      "command": "builtin untracked whitespace check",
+      "scope": "untracked",
+      "filter_mode": "file",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    }
+  ]
+}

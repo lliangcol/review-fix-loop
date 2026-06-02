@@ -1,0 +1,7 @@
+display_name: Review Fix Loop Core
+short_description: Enforces fresh review/fix/re-review loops over live Git snapshots.
+default_prompt: >
+  Review the current Git changes, fix in-scope findings, refresh the snapshot,
+  and re-review invalidated slices until no new findings remain and blocking
+  gates pass.
+

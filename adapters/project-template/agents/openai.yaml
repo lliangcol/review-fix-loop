@@ -1,0 +1,6 @@
+display_name: Review Fix Loop Project Adapter
+short_description: Adds project-specific gates and risk boundaries to review-fix-loop-core.
+default_prompt: >
+  Use this adapter with review-fix-loop-core to load project rules, classify
+  risk, and run the configured gates for the current repository.
+

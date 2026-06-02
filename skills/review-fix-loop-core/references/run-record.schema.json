@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Fix Loop Run Record",
+  "type": "object",
+  "required": [
+    "schema",
+    "run_id",
+    "mode",
+    "pass",
+    "snapshot_id",
+    "config_hash",
+    "rule_hashes",
+    "must_reload",
+    "reloaded_slices",
+    "reused_slices",
+    "planned_gates",
+    "fixes",
+    "diagnostics",
+    "gates",
+    "stop_decision",
+    "residual_risks"
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "run_id": { "type": "string" },
+    "mode": { "enum": ["normal_loop", "large_merge"] },
+    "pass": { "type": "integer" },
+    "snapshot_id": { "type": "string" },
+    "config_hash": { "type": "string" },
+    "rule_hashes": { "type": "object" },
+    "must_reload": { "type": "array" },
+    "reloaded_slices": { "type": "array" },
+    "reused_slices": { "type": "array" },
+    "planned_gates": { "type": "array" },
+    "fixes": { "type": "array" },
+    "diagnostics": { "type": "array" },
+    "gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "exit_code", "duration_ms"]
+      }
+    },
+    "stop_decision": { "enum": ["continue", "stop", "blocked"] },
+    "residual_risks": { "type": "array" }
+  }
+}
+

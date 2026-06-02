@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Fix Loop Diagnostic",
+  "type": "object",
+  "required": ["tool", "severity", "message", "scope", "blocking"],
+  "properties": {
+    "tool": { "type": "string" },
+    "severity": { "enum": ["info", "warning", "error"] },
+    "rule": { "type": ["string", "null"] },
+    "file": { "type": ["string", "null"] },
+    "line": { "type": ["integer", "null"] },
+    "column": { "type": ["integer", "null"] },
+    "message": { "type": "string" },
+    "scope": { "type": "string" },
+    "slice": { "type": ["string", "null"] },
+    "blocking": { "type": "boolean" }
+  }
+}
+

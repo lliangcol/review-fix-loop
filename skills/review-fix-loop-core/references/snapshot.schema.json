@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Review Fix Loop Snapshot",
+  "type": "object",
+  "required": [
+    "schema",
+    "mode",
+    "pass",
+    "snapshot_id",
+    "baseline",
+    "merge_base",
+    "config_hash",
+    "rule_hashes",
+    "scope_hashes",
+    "slice_hashes",
+    "entries",
+    "planned_gates",
+    "must_reload",
+    "reloaded_slices",
+    "reused_slices",
+    "reuse_forbidden_slices"
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "mode": { "enum": ["normal_loop", "large_merge"] },
+    "pass": { "type": "integer", "minimum": 1 },
+    "snapshot_id": { "type": "string" },
+    "previous_snapshot_id": { "type": ["string", "null"] },
+    "baseline": { "type": ["string", "null"] },
+    "merge_base": { "type": ["string", "null"] },
+    "config_hash": { "type": "string" },
+    "rule_hashes": { "type": "object" },
+    "scope_hashes": { "type": "object" },
+    "slice_hashes": { "type": "object" },
+    "planned_gates": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "must_reload": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reloaded_slices": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reused_slices": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "reuse_forbidden_slices": { "type": "object" },
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["scope", "status", "path", "deleted", "binary"],
+          "properties": {
+            "scope": { "type": "string" },
+            "status": { "type": "string" },
+            "path": { "type": "string" },
+            "old_path": { "type": "string" },
+            "deleted": { "type": "boolean" },
+            "binary": { "type": "boolean" },
+            "content_hash": { "type": ["string", "null"] },
+            "slice": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
