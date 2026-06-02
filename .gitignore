@@ -1,9 +1,14 @@
 .pytest_cache/
 __pycache__/
 *.pyc
+*.py[cod]
 dist/
 build/
 *.egg-info/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.venv/
 .review-fix-loop.local.json
 .review-fix-loop/
-

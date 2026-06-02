@@ -1,0 +1,9 @@
+flowchart LR
+  A["Live Git worktree"] --> B["Pass 1 snapshot"]
+  B --> C["AI review"]
+  C --> D["Fix findings"]
+  D --> E["Run planned gates"]
+  E --> F["Pass 2 fresh snapshot"]
+  F --> G["Reload changed slices"]
+  G --> H["Re-review current state"]
+  B -. "old diff is invalid after fixes" .-> F

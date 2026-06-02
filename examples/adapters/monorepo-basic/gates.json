@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "rule_files": ["adapters/project-template/SKILL.md"],
+  "rule_files": [],
   "modes": {
     "normal_loop": {
       "scope": ["staged", "unstaged", "untracked"],
@@ -18,29 +18,24 @@
   },
   "slices": [
     {
-      "id": "source",
-      "paths": ["src/**", "lib/**"],
+      "id": "backend",
+      "paths": ["services/api/**", "packages/backend/**"],
+      "risk": "high"
+    },
+    {
+      "id": "frontend",
+      "paths": ["apps/web/**", "packages/frontend/**"],
+      "risk": "medium"
+    },
+    {
+      "id": "shared",
+      "paths": ["packages/shared/**"],
       "risk": "high"
     },
     {
       "id": "docs",
-      "paths": ["docs/**", "README.md"],
-      "risk": "medium"
-    },
-    {
-      "id": "tests",
-      "paths": ["tests/**"],
-      "risk": "medium"
-    },
-    {
-      "id": "project-config",
-      "paths": [".github/**", ".gitignore", "pyproject.toml", "MANIFEST.in", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"],
-      "risk": "medium"
-    },
-    {
-      "id": "tools",
-      "paths": ["tools/**", "scripts/**"],
-      "risk": "medium"
+      "paths": ["README.md", "docs/**"],
+      "risk": "low"
     }
   ],
   "gates": [
@@ -95,6 +90,34 @@
       "timeout_seconds": 60,
       "parser": {
         "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "backend-tests",
+      "argv": ["python", "-m", "pytest", "services/api/tests", "packages/backend/tests", "-q"],
+      "command": "python -m pytest services/api/tests packages/backend/tests -q",
+      "scope": "all",
+      "when_paths": ["services/api/**", "packages/backend/**", "packages/shared/**"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 600,
+      "parser": {
+        "type": "exit-code"
+      }
+    },
+    {
+      "id": "frontend-tests",
+      "argv": ["corepack", "pnpm", "--filter", "web", "test"],
+      "command": "corepack pnpm --filter web test",
+      "scope": "all",
+      "when_paths": ["apps/web/**", "packages/frontend/**", "packages/shared/**"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 600,
+      "parser": {
+        "type": "exit-code"
       }
     }
   ]

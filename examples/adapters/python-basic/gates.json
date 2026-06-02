@@ -11,15 +11,13 @@
       "scope": ["merge_base_to_head", "staged", "unstaged", "untracked"],
       "require_risk_slices": true,
       "require_invariant_checks": true,
-      "require_residual_risk_report": true,
-      "max_deep_review_files": 80,
-      "max_diff_bytes_per_slice": 250000
+      "require_residual_risk_report": true
     }
   },
   "slices": [
     {
       "id": "source",
-      "paths": ["src/**", "lib/**"],
+      "paths": ["src/**", "*.py"],
       "risk": "medium"
     },
     {
@@ -28,13 +26,13 @@
       "risk": "low"
     },
     {
-      "id": "project-config",
-      "paths": [".github/**", ".gitignore", "pyproject.toml", "MANIFEST.in", "adapters/**"],
+      "id": "packaging",
+      "paths": ["pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in"],
       "risk": "medium"
     },
     {
       "id": "docs",
-      "paths": ["*.md", "LICENSE", "NOTICE", "docs/**", "skills/**", "examples/**"],
+      "paths": ["README.md", "docs/**"],
       "risk": "low"
     }
   ],
@@ -76,6 +74,34 @@
       "timeout_seconds": 60,
       "parser": {
         "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "pytest",
+      "argv": ["python", "-m", "pytest", "-q"],
+      "command": "python -m pytest -q",
+      "scope": "all",
+      "when_paths": ["src/**", "tests/**", "*.py"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 300,
+      "parser": {
+        "type": "exit-code"
+      }
+    },
+    {
+      "id": "build-check",
+      "argv": ["python", "-m", "build"],
+      "command": "python -m build",
+      "scope": "all",
+      "when_paths": ["pyproject.toml", "setup.cfg", "setup.py", "MANIFEST.in"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 300,
+      "parser": {
+        "type": "exit-code"
       }
     }
   ]

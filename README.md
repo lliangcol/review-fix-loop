@@ -1,28 +1,40 @@
 # Review Fix Loop
 
-Review Fix Loop is a local-first toolkit for AI agents that need to review Git
-changes, fix findings, and re-review from a fresh live snapshot.
+> Local-first fresh re-review contract for AI agents.
 
-The project provides:
+[![CI](https://github.com/lliangcol/review-fix-loop/actions/workflows/ci.yml/badge.svg)](https://github.com/lliangcol/review-fix-loop/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.10--3.14-blue)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 
-- a dependency-free Python runtime and CLI;
-- a `review-fix-loop-core` Skill for agent workflow control;
-- staged, unstaged, untracked, and branch-diff snapshot separation;
-- slice invalidation to block stale diff reuse;
-- diagnostic normalization and gate planning;
-- durable run records that avoid storing full source, full diffs, secrets, or
-  unredacted command output.
+Review Fix Loop prevents stale-diff reuse in AI review/fix/re-review loops. After an AI agent fixes findings, the next review pass must start from a fresh live snapshot of the Git worktree, selected gates, and durable redacted run records.
 
-## Install
+## Why It Exists
+
+AI coding agents often work in loops:
+
+1. review the current diff;
+2. fix findings;
+3. re-review to decide whether the work is done.
+
+The failure mode is subtle: pass 2 can accidentally reuse pass 1 diff text or pass 1 findings after files have changed. That makes the re-review stale. Review Fix Loop turns the loop into a local contract: every pass reloads changed slices from the live repository before the agent reasons again.
+
+## What Makes It Different
+
+| Tool type | Primary job | Fresh snapshot after fixes | Local-first | Boundary |
+| --- | --- | --- | --- | --- |
+| Hosted PR bot | Review pull requests in a hosted service | Depends on the bot workflow | Usually no | External service, account, and repository permissions |
+| reviewdog / pre-commit | Run diagnostics and hooks | Not the main contract | Yes | Great for checks, not a re-review loop protocol |
+| Review Fix Loop | Govern AI review/fix/re-review loops | Yes | Yes | No hosted bot, no model API, no external service |
+
+## 5-Minute Quickstart
+
+Run these commands from this repository checkout, or from a target repository that already contains the referenced adapter file. For another repository, copy `adapters/project-template` first or pass an absolute config path.
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-The runtime package has no install-time dependencies. Development extras are
-only for tests and release checks.
-
-## Snapshot
+Create a pass 1 snapshot and write local run records:
 
 ```bash
 review-fix-loop snapshot \
@@ -30,10 +42,20 @@ review-fix-loop snapshot \
   --config adapters/generic/gates.json \
   --mode normal_loop \
   --pass 1 \
-  --write-run-record
+  --write-run-record \
+  --cache-dir .review-fix-loop
 ```
 
-For pass 2 and later, pass the previous run record:
+Run gates selected by that snapshot:
+
+```bash
+review-fix-loop gate \
+  --repo . \
+  --config adapters/generic/gates.json \
+  --snapshot .review-fix-loop/runs/<run-id>/snapshot.json
+```
+
+After fixing code, create pass 2 from the previous run record:
 
 ```bash
 review-fix-loop snapshot \
@@ -41,35 +63,50 @@ review-fix-loop snapshot \
   --config adapters/generic/gates.json \
   --mode normal_loop \
   --pass 2 \
-  --previous-run-record <run-root>/run-record.json \
-  --write-run-record
+  --previous-run-record .review-fix-loop/runs/<run-id>/run-record.json \
+  --write-run-record \
+  --cache-dir .review-fix-loop
 ```
 
-Reusing pass 1 diff or pass 1 findings without a fresh snapshot is an invalid
-workflow.
+Reusing pass 1 diff text or pass 1 findings without this fresh snapshot is an invalid workflow.
 
-## Gates
+## Who It Is For
+
+- AI coding agent power users working with Claude, Codex, Cursor, Aider, or similar local workflows.
+- Privacy-sensitive teams that want review-loop governance without uploading source to a hosted reviewer.
+- Workflow-governance maintainers who need repeatable rules for snapshot, gate, and run-record handling.
+- Adapter authors who want project-specific gates without rewriting the core loop contract.
+
+## How It Works
+
+```text
+live Git worktree -> snapshot -> agent review -> fixes -> gates -> fresh snapshot -> re-review
+```
+
+Snapshots separate staged, unstaged, untracked, and branch-diff scopes. Slices are invalidated when their hashes, rule files, or gate config change. Run records keep durable metadata while avoiding full source text, full diffs, secrets, and unredacted command output.
+
+## Current Boundaries
+
+Review Fix Loop is not a hosted PR bot, not a GitHub App, not a hook framework, and not a model service. It does not require GitHub App credentials, cloud sandboxes, model API keys, or external services.
+
+## Documentation
+
+- [Quickstart](docs/quickstart.md)
+- [Architecture](docs/architecture.md)
+- [Adapters](docs/adapters.md)
+- [Comparisons](docs/comparisons.md)
+- [Contracts](docs/contracts.md)
+- [Template repository guide](docs/template-repository.md)
+- [FAQ](docs/faq.md)
+- [简体中文](README.zh-CN.md)
+
+## Development
 
 ```bash
-review-fix-loop gate \
-  --repo . \
-  --config adapters/generic/gates.json \
-  --snapshot <run-root>/snapshot.json
+python -m pip install -e ".[dev]"
+python -m pytest -q
+python -m build
+python -m twine check dist/*
 ```
 
-The gate runner executes only gate IDs selected by the snapshot. If the
-effective config hash changed since the snapshot, it fails and requires a new
-snapshot.
-
-## Inspirations
-
-The design borrows public patterns from PR-Agent, OpenReview, Gito, reviewdog,
-Danger JS, and pre-commit: configurable PR review, large PR context handling,
-durable workflows, limited mechanical fixes, provider-agnostic review,
-diagnostic filtering, team conventions as code, and staged-file local gates.
-
-## Release Boundary
-
-Version 0.1.0 is not a hosted PR bot. It does not require GitHub App
-credentials, cloud sandboxes, model API keys, or external services.
-
+The runtime package has no install-time dependencies. Development extras are only for tests and release checks.

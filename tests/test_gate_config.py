@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 from review_fix_loop.cli import main
+from review_fix_loop.config import load_effective_config
+from review_fix_loop.slices import assign_slice
 
 
 def git(repo: Path, *args: str) -> None:
@@ -324,3 +326,25 @@ def test_regex_parser_requires_pattern(capsys, tmp_path: Path) -> None:
 
     assert code == 1
     assert "requires a pattern" in captured.err
+
+
+def test_generic_adapter_classifies_public_project_files() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    config, _, _ = load_effective_config(repo, repo / "adapters" / "generic" / "gates.json")
+    slices = config["slices"]
+
+    expected = {
+        ".github/workflows/ci.yml": "project-config",
+        ".gitignore": "project-config",
+        "pyproject.toml": "project-config",
+        "MANIFEST.in": "project-config",
+        "adapters/project-template/README.md": "project-config",
+        "README.zh-CN.md": "docs",
+        "CHANGELOG.md": "docs",
+        "LICENSE": "docs",
+        "docs/quickstart.md": "docs",
+        "examples/adapters/python-basic/gates.json": "docs",
+    }
+
+    for path, slice_id in expected.items():
+        assert assign_slice(path, slices) == slice_id

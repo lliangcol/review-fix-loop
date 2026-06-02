@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "rule_files": [],
+  "modes": {
+    "normal_loop": {
+      "scope": ["staged", "unstaged", "untracked"],
+      "require_fresh_snapshot": true
+    },
+    "large_merge": {
+      "baseline": "origin/main",
+      "scope": ["merge_base_to_head", "staged", "unstaged", "untracked"],
+      "require_risk_slices": true,
+      "require_invariant_checks": true,
+      "require_residual_risk_report": true
+    }
+  },
+  "slices": [
+    {
+      "id": "frontend-source",
+      "paths": ["src/**", "app/**", "components/**"],
+      "risk": "medium"
+    },
+    {
+      "id": "frontend-tests",
+      "paths": ["tests/**", "src/**/*.test.*", "src/**/*.spec.*"],
+      "risk": "low"
+    },
+    {
+      "id": "package-metadata",
+      "paths": ["package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"],
+      "risk": "high"
+    },
+    {
+      "id": "docs",
+      "paths": ["README.md", "docs/**"],
+      "risk": "low"
+    }
+  ],
+  "gates": [
+    {
+      "id": "working-tree-whitespace",
+      "argv": ["git", "diff", "--check"],
+      "command": "git diff --check",
+      "scope": "unstaged",
+      "filter_mode": "diff_context",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "staged-whitespace",
+      "argv": ["git", "diff", "--cached", "--check"],
+      "command": "git diff --cached --check",
+      "scope": "staged",
+      "filter_mode": "diff_context",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "untracked-whitespace",
+      "argv": ["__builtin__:untracked-whitespace"],
+      "command": "builtin untracked whitespace check",
+      "scope": "untracked",
+      "filter_mode": "file",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "git-diff-check"
+      }
+    },
+    {
+      "id": "lint",
+      "argv": ["corepack", "pnpm", "lint"],
+      "command": "corepack pnpm lint",
+      "scope": "all",
+      "when_paths": ["src/**", "app/**", "components/**", "tests/**"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 300,
+      "parser": {
+        "type": "exit-code"
+      }
+    },
+    {
+      "id": "test",
+      "argv": ["corepack", "pnpm", "test"],
+      "command": "corepack pnpm test",
+      "scope": "all",
+      "when_paths": ["src/**", "app/**", "components/**", "tests/**"],
+      "filter_mode": "nofilter",
+      "fail_level": "error",
+      "blocking": true,
+      "timeout_seconds": 300,
+      "parser": {
+        "type": "exit-code"
+      }
+    },
+    {
+      "id": "install-metadata-review",
+      "argv": ["git", "status", "--short", "--", "package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"],
+      "command": "git status --short -- package.json pnpm-lock.yaml package-lock.json yarn.lock",
+      "scope": "all",
+      "when_paths": ["package.json", "pnpm-lock.yaml", "package-lock.json", "yarn.lock"],
+      "filter_mode": "nofilter",
+      "fail_level": "none",
+      "blocking": false,
+      "timeout_seconds": 60,
+      "parser": {
+        "type": "exit-code"
+      }
+    }
+  ]
+}

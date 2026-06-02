@@ -1,0 +1,26 @@
+name: Question
+description: Ask a usage or workflow question.
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Workflow
+      description: What review/fix/re-review workflow are you trying to run?
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands tried
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include OS, Python version, adapter, mode, and pass number if relevant.
+    validations:
+      required: false
