@@ -3,7 +3,27 @@ name: review-fix-loop-core
 description: >
   Use for iterative review, fix, and fresh re-review of Git worktree or branch
   changes. Enforces live snapshot refresh, slice invalidation, diagnostics,
-  gate planning, and large merge review coverage reporting.
+  gate planning, and large merge coverage.
+license: Apache-2.0
+version: 0.1.0
+compatibility:
+  agents:
+    - claude-code
+    - codex
+    - copilot
+    - gemini-cli
+  install_modes:
+    - mount
+    - copy
+allowed-tools: "python git"
+metadata:
+  review_fix_loop:
+    user-invocable: true
+    auto-load: false
+    disable-model-invocation: false
+    domain: tool
+    kb-paths: []
+    ownership-scope: core-runtime
 ---
 
 # Review Fix Loop Core

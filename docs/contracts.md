@@ -20,6 +20,10 @@ This page summarizes the behavior covered by the current test suite and contract
 ## Gates
 
 - Gates are planned from the snapshot and run by ID.
+- `when_paths` selectors limit expensive or domain-specific gates to relevant
+  changed paths.
+- `final_always` gates can be planned for a final-pass snapshot even when no
+  matching path changed.
 - Warning diagnostics below an `error` fail level do not fail the gate.
 - Nonblocking JSON diagnostics do not fail a blocking gate.
 - Malformed JSON diagnostics, invalid diagnostic shape, and missing commands are reported as gate failures.

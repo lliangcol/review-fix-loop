@@ -96,6 +96,7 @@ Review Fix Loop is not a hosted PR bot, not a GitHub App, not a hook framework, 
 - [Adapters](docs/adapters.md)
 - [Comparisons](docs/comparisons.md)
 - [Contracts](docs/contracts.md)
+- [Review loop runbook](docs/review-loop-runbook.md)
 - [Template repository guide](docs/template-repository.md)
 - [FAQ](docs/faq.md)
 - [简体中文](README.zh-CN.md)
