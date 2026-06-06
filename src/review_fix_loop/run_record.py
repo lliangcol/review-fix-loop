@@ -7,6 +7,7 @@ from typing import Any
 
 from .errors import WorkflowError
 from .git_snapshot import git_path
+from .utils import redact_data
 
 
 def make_run_id(snapshot_id: str) -> str:
@@ -16,7 +17,11 @@ def make_run_id(snapshot_id: str) -> str:
 
 
 def resolve_run_root(repo: Path, cache_dir: str | None, run_id: str) -> Path:
-    base = Path(cache_dir).resolve() if cache_dir else git_path(repo, "review-fix-loop")
+    if cache_dir:
+        requested = Path(cache_dir)
+        base = requested.resolve() if requested.is_absolute() else (repo / requested).resolve()
+    else:
+        base = git_path(repo, "review-fix-loop")
     return base / "runs" / run_id
 
 
@@ -50,6 +55,7 @@ def build_run_record(snapshot: dict[str, Any], run_id: str) -> dict[str, Any]:
         "previous_snapshot_id": snapshot.get("previous_snapshot_id"),
         "config_hash": snapshot["config_hash"],
         "rule_hashes": snapshot["rule_hashes"],
+        "final_pass": snapshot.get("final_pass", False),
         "scope_hashes": snapshot["scope_hashes"],
         "slice_hashes": snapshot["slice_hashes"],
         "must_reload": snapshot.get("must_reload", []),
@@ -70,7 +76,7 @@ def write_run_outputs(run_root: Path, snapshot: dict[str, Any], run_record: dict
     run_record_path = run_root / "run-record.json"
     write_json(snapshot_path, snapshot)
     write_json(run_record_path, run_record)
-    write_json(run_root / "gates.json", config)
+    write_json(run_root / "gates.json", redact_data(config))
     summary = (
         f"Status: continue\n"
         f"Mode: {snapshot['mode']}\n"

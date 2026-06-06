@@ -1,18 +1,31 @@
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .errors import GitError
-from .utils import decode_git_path, is_probably_binary, normalize_repo_path, sha256_json, stream_file_hash
+from .utils import (
+    DEFAULT_FILE_HASH_LIMIT_BYTES,
+    decode_git_path,
+    is_probably_binary,
+    normalize_repo_path,
+    sha256_json,
+    sha256_text,
+    stream_file_hash,
+)
 
 SCOPES = ["merge_base_to_head", "staged", "unstaged", "untracked"]
 
 
 def run_git(repo: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[bytes]:
     command = ["git", "-C", str(repo), *args]
-    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=None, shell=False)
+    try:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=None, shell=False)
+    except OSError as exc:
+        raise GitError(f"could not execute git: {exc}") from exc
     if check and result.returncode != 0:
         stderr = result.stderr.decode("utf-8", "replace").strip()
         raise GitError(f"git command failed: {' '.join(args)}: {stderr}")
@@ -126,18 +139,120 @@ def blob_is_binary(repo: Path, blob_id: str | None) -> bool:
     return b"\0" in sample
 
 
+def merge_line_ranges(lines: list[int]) -> list[list[int]]:
+    if not lines:
+        return []
+    ranges: list[list[int]] = []
+    start = previous = lines[0]
+    for line in lines[1:]:
+        if line == previous + 1:
+            previous = line
+            continue
+        ranges.append([start, previous])
+        start = previous = line
+    ranges.append([start, previous])
+    return ranges
+
+
+def merge_ranges(ranges: list[list[int]]) -> list[list[int]]:
+    if not ranges:
+        return []
+    ordered = sorted(ranges, key=lambda item: (item[0], item[1]))
+    merged = [ordered[0]]
+    for start, end in ordered[1:]:
+        current = merged[-1]
+        if start <= current[1] + 1:
+            current[1] = max(current[1], end)
+        else:
+            merged.append([start, end])
+    return merged
+
+
+def parse_diff_line_ranges(diff_output: bytes) -> tuple[list[list[int]], list[list[int]]]:
+    added_lines: list[int] = []
+    context_ranges: list[list[int]] = []
+    new_line = 0
+    for line_text in diff_output.decode("utf-8", "replace").splitlines():
+        match = re.match(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", line_text)
+        if match:
+            new_line = int(match.group("start"))
+            count = int(match.group("count") or "1")
+            if count > 0:
+                context_ranges.append([new_line, new_line + count - 1])
+            continue
+        if line_text.startswith("+++") or line_text.startswith("---"):
+            continue
+        if line_text.startswith("+"):
+            added_lines.append(new_line)
+            new_line += 1
+        elif line_text.startswith("-"):
+            continue
+        elif line_text.startswith(" "):
+            new_line += 1
+    return merge_line_ranges(added_lines), merge_ranges(context_ranges)
+
+
+def diff_line_ranges_for_path(repo: Path, scope: str, path: str, merge_base: str | None = None) -> tuple[list[list[int]], list[list[int]]]:
+    if scope == "staged":
+        args = ["diff", "--cached", "--unified=3", "--no-ext-diff", "--", path]
+    elif scope == "unstaged":
+        args = ["diff", "--unified=3", "--no-ext-diff", "--", path]
+    elif scope == "merge_base_to_head":
+        if not merge_base:
+            return [], []
+        args = ["diff", "--unified=3", "--no-ext-diff", f"{merge_base}..HEAD", "--", path]
+    else:
+        return [], []
+    result = run_git(repo, args, check=False)
+    if result.returncode != 0:
+        return [], []
+    return parse_diff_line_ranges(result.stdout)
+
+
+def count_text_lines(path: Path) -> int:
+    size = path.stat().st_size
+    if size > DEFAULT_FILE_HASH_LIMIT_BYTES:
+        return 2_147_483_647
+    with path.open("rb") as handle:
+        content = handle.read()
+    if not content:
+        return 1
+    return content.count(b"\n") + (0 if content.endswith((b"\n", b"\r")) else 1)
+
+
+def attach_untracked_ranges(file_path: Path, entry: dict[str, Any]) -> None:
+    if entry.get("deleted") or entry.get("binary") or entry.get("symlink"):
+        entry["changed_lines"] = []
+        entry["diff_context_lines"] = []
+        return
+    line_count = count_text_lines(file_path)
+    entry["changed_lines"] = [[1, line_count]]
+    entry["diff_context_lines"] = [[1, line_count]]
+
+
 def enrich_worktree_entry(repo: Path, entry: dict[str, Any]) -> None:
     path = entry["path"]
     file_path = repo / path
+    if file_path.is_symlink():
+        entry["deleted"] = False
+        entry["binary"] = False
+        entry["symlink"] = True
+        entry["content_hash"] = "symlink:" + sha256_text(os.readlink(file_path))
+        entry["changed_lines"] = []
+        entry["diff_context_lines"] = []
+        return
     if entry.get("deleted") or not file_path.exists():
         entry["deleted"] = True
         entry["binary"] = False
         entry["content_hash"] = None
+        entry["changed_lines"] = []
+        entry["diff_context_lines"] = []
         return
     entry["deleted"] = False
     entry["binary"] = is_probably_binary(file_path)
-    content_hash, truncated = stream_file_hash(file_path)
+    content_hash, truncated = stream_file_hash(file_path, DEFAULT_FILE_HASH_LIMIT_BYTES)
     entry["content_hash"] = content_hash
+    entry["size_bytes"] = file_path.stat().st_size
     if truncated:
         entry["hash_truncated"] = True
 
@@ -151,11 +266,14 @@ def collect_staged(repo: Path) -> list[dict[str, Any]]:
         if entry.get("deleted"):
             entry["binary"] = False
             entry["content_hash"] = None
+            entry["changed_lines"] = []
+            entry["diff_context_lines"] = []
             continue
         blob = blobs.get(entry["path"])
         entry["blob_id"] = blob
         entry["content_hash"] = f"gitblob:{blob}" if blob else None
         entry["binary"] = blob_is_binary(repo, blob)
+        entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "staged", entry["path"])
     return entries
 
 
@@ -164,6 +282,8 @@ def collect_unstaged(repo: Path) -> list[dict[str, Any]]:
     entries = parse_name_status_z(result.stdout, "unstaged")
     for entry in entries:
         enrich_worktree_entry(repo, entry)
+        if not entry.get("deleted"):
+            entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "unstaged", entry["path"])
     return entries
 
 
@@ -182,6 +302,7 @@ def collect_untracked(repo: Path) -> list[dict[str, Any]]:
             "deleted": False,
         }
         enrich_worktree_entry(repo, entry)
+        attach_untracked_ranges(repo / path, entry)
         entries.append(entry)
     return entries
 
@@ -204,6 +325,7 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
         entry["blob_id"] = blob
         entry["content_hash"] = f"gitblob:{blob}" if blob else None
         entry["binary"] = blob_is_binary(repo, blob)
+        entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "merge_base_to_head", entry["path"], merge_base)
     return merge_base, entries
 
 

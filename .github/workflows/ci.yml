@@ -44,6 +44,13 @@ jobs:
           python -m build
           python -m twine check dist/*
 
+      - name: Wheel CLI smoke
+        run: |
+          python -c "import glob, subprocess, sys; wheels=glob.glob('dist/*.whl'); assert len(wheels) == 1, wheels; subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', '--no-deps', wheels[0]])"
+          review-fix-loop --help
+          review-fix-loop list-adapters
+          review-fix-loop validate-schema --schema gate-config --file adapters/generic/gates.json --repo .
+
       - name: Check generated artifacts are not tracked
         shell: bash
         run: |

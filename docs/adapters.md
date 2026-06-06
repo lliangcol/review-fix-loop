@@ -43,19 +43,33 @@ The config file is JSON. A gate includes:
   changed paths in the gate scope match one of these globs;
 - `modes`: optional list that restricts a gate to `normal_loop` or
   `large_merge`;
-- `filter_mode`: how diagnostics should be associated with changed paths;
+- `filter_mode`: `nofilter`, `file`, `added`, or `diff_context`;
 - `fail_level`: minimum severity that fails the gate;
 - `blocking`: whether failures block the loop;
 - `timeout_seconds`: maximum local runtime for the gate;
 - `final_always`: whether a gate should run on a final-pass snapshot even when
   no matching path changed;
-- `parser`: `exit-code`, `git-diff-check`, `regex-lines`, or `json-diagnostics`.
+- `parser`: `exit-code`, `git-diff-check`, `regex-lines`, `json-diagnostics`,
+  `rdjson`, `sarif`, or `checkstyle`.
+
+`file` keeps diagnostics on changed files. `added` keeps diagnostics on changed
+new-side lines. `diff_context` keeps diagnostics within the snapshot's unified
+diff context. Diagnostics without a file are kept so tool-level parse and
+execution failures are not hidden.
 
 Use `{baseline}`, `{merge_base}`, and `{snapshot_id}` tokens in `argv` when a gate needs snapshot-derived values.
 
+Built-in commands:
+
+- `__builtin__:untracked-whitespace`: checks untracked text files without
+  staging or mutating the index;
+- `__builtin__:policy`: emits JSON diagnostics for simple path policies such as
+  `require_changed_paths`, `forbid_changed_paths`, and `require_final_pass`.
+
 ## Authoring Flow
 
-1. Copy `adapters/project-template` into your repository or into a local adapter directory.
+1. Run `review-fix-loop init --repo . --output review-fix-loop.gates.json`, or
+   copy `adapters/project-template` into your repository.
 2. Replace slices with your project ownership boundaries.
 3. Replace gates with commands that already work locally.
 4. Add rule files that describe review policy and risk boundaries.

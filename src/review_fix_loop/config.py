@@ -14,7 +14,7 @@ VALID_MODES = {"normal_loop", "large_merge"}
 VALID_RISKS = {"low", "medium", "high"}
 VALID_FILTER_MODES = {"added", "diff_context", "file", "nofilter"}
 VALID_FAIL_LEVELS = {"none", "info", "warning", "error"}
-VALID_PARSERS = {"exit-code", "git-diff-check", "regex-lines", "json-diagnostics"}
+VALID_PARSERS = {"exit-code", "git-diff-check", "regex-lines", "json-diagnostics", "rdjson", "sarif", "checkstyle"}
 
 
 def load_json_file(path: Path) -> dict[str, Any]:
@@ -149,6 +149,15 @@ def validate_config(config: dict[str, Any]) -> None:
         if not isinstance(parser, dict) or parser.get("type", "exit-code") not in VALID_PARSERS:
             raise ConfigError(f"gate {gate_id} has invalid parser type")
         parser_type = parser.get("type", "exit-code")
+        policy = gate.get("policy")
+        if argv[0] == "__builtin__:policy":
+            if not isinstance(policy, dict):
+                raise ConfigError(f"gate {gate_id} builtin policy requires a policy object")
+            for field in ("require_changed_paths", "forbid_changed_paths"):
+                if field in policy and (not isinstance(policy[field], list) or not all(isinstance(path, str) for path in policy[field])):
+                    raise ConfigError(f"gate {gate_id} policy {field} must be a string list")
+            if "require_final_pass" in policy and not isinstance(policy["require_final_pass"], bool):
+                raise ConfigError(f"gate {gate_id} policy require_final_pass must be a boolean")
         if parser_type == "regex-lines":
             pattern = parser.get("pattern")
             if not isinstance(pattern, str) or not pattern:

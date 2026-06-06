@@ -43,6 +43,9 @@ review-fix-loop = "review_fix_loop.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+review_fix_loop = ["templates/*.json", "schemas/*.json"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

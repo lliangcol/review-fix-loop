@@ -24,12 +24,19 @@ AI 编程工具常见工作流是：
 python -m pip install -e ".[dev]"
 ```
 
+初始化目标仓库的默认 adapter：
+
+```bash
+review-fix-loop init --repo . --output review-fix-loop.gates.json
+review-fix-loop validate-config --repo . --config review-fix-loop.gates.json
+```
+
 生成 pass 1 snapshot：
 
 ```bash
 review-fix-loop snapshot \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --mode normal_loop \
   --pass 1 \
   --write-run-record \
@@ -41,7 +48,7 @@ review-fix-loop snapshot \
 ```bash
 review-fix-loop gate \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --snapshot .review-fix-loop/runs/<run-id>/snapshot.json
 ```
 
@@ -50,7 +57,7 @@ review-fix-loop gate \
 ```bash
 review-fix-loop snapshot \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --mode normal_loop \
   --pass 2 \
   --previous-run-record .review-fix-loop/runs/<run-id>/run-record.json \
@@ -59,6 +66,8 @@ review-fix-loop snapshot \
 ```
 
 `.review-fix-loop/` 是本地 run record 目录，不应提交到仓库。
+最终确认轮需要加 `--final-pass`，这样 `final_always` gates 会进入
+`planned_gates`，并写入不同的 snapshot identity。
 
 ## 适用人群
 

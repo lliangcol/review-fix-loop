@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
@@ -36,6 +38,20 @@ def sha256_json(data: Any) -> str:
 
 
 def stream_file_hash(path: Path, limit_bytes: int | None = None) -> tuple[str, bool]:
+    if limit_bytes is not None:
+        size = path.stat().st_size
+        if size > limit_bytes:
+            digest = hashlib.sha256()
+            digest.update(f"sampled-size:{size}\0limit:{limit_bytes}\0".encode("ascii"))
+            head_size = limit_bytes // 2
+            tail_size = limit_bytes - head_size
+            with path.open("rb") as handle:
+                digest.update(handle.read(head_size))
+                if tail_size:
+                    handle.seek(max(size - tail_size, 0))
+                    digest.update(handle.read(tail_size))
+            return "sha256-sample:" + digest.hexdigest(), True
+
     digest = hashlib.sha256()
     total = 0
     truncated = False
@@ -57,7 +73,7 @@ def stream_file_hash(path: Path, limit_bytes: int | None = None) -> tuple[str, b
 
 
 def is_probably_binary(path: Path) -> bool:
-    if not path.exists() or not path.is_file():
+    if path.is_symlink() or not path.exists() or not path.is_file():
         return False
     with path.open("rb") as handle:
         return b"\0" in handle.read(8192)
@@ -124,3 +140,13 @@ def redact_text(text: str) -> str:
         else:
             redacted = pattern.sub(lambda m: m.group(1) + "[REDACTED]", redacted)
     return redacted
+
+
+def redact_data(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, Mapping):
+        return {key: redact_data(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+        return [redact_data(item) for item in value]
+    return copy.deepcopy(value)

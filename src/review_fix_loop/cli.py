@@ -6,11 +6,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .assets import discover_adapters, read_adapter_config
 from .config import load_effective_config
 from .errors import ConfigError, GitError, ReviewFixLoopError, WorkflowError
 from .gates import plan_gates, run_planned_gates
-from .git_snapshot import collect_scopes, compute_scope_hashes, resolve_repo
+from .git_snapshot import collect_scopes, compute_scope_hashes, resolve_repo, run_git
+from .repo_map import build_repo_map
 from .run_record import build_run_record, make_run_id, read_json, resolve_run_root, write_run_outputs
+from .schema_validation import validate_json_schema
 from .slices import attach_slices, compute_slice_hashes, paths_by_slice
 from .utils import sha256_json
 
@@ -30,12 +33,44 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot.add_argument("--write-run-record", action="store_true")
     snapshot.add_argument("--rule-file", action="append", default=[])
     snapshot.add_argument("--cache-dir")
+    snapshot.add_argument("--include-repo-map", action="store_true")
+    snapshot.add_argument("--repo-map-limit", type=int, default=40)
 
     gate = subparsers.add_parser("gate", help="Run gates selected by a snapshot")
     gate.add_argument("--repo", required=True)
     gate.add_argument("--config", required=True)
     gate.add_argument("--snapshot", required=True)
     gate.add_argument("--rule-file", action="append", default=[])
+
+    init = subparsers.add_parser("init", help="Create an adapter config in a target repo")
+    init.add_argument("--repo", required=True)
+    init.add_argument("--adapter", default="generic")
+    init.add_argument("--output", default="review-fix-loop.gates.json")
+    init.add_argument("--force", action="store_true")
+
+    list_adapters = subparsers.add_parser("list-adapters", help="List built-in and local adapter configs")
+    list_adapters.add_argument("--repo")
+
+    validate_config = subparsers.add_parser("validate-config", help="Validate and hash an effective gate config")
+    validate_config.add_argument("--repo", required=True)
+    validate_config.add_argument("--config", required=True)
+    validate_config.add_argument("--rule-file", action="append", default=[])
+
+    validate_schema = subparsers.add_parser("validate-schema", help="Validate a JSON artifact against a bundled schema")
+    validate_schema.add_argument("--schema", required=True, choices=["gate-config", "snapshot", "run-record", "diagnostic"])
+    validate_schema.add_argument("--file", required=True)
+    validate_schema.add_argument("--repo")
+
+    doctor = subparsers.add_parser("doctor", help="Check local git/config readiness without running gates")
+    doctor.add_argument("--repo", required=True)
+    doctor.add_argument("--config")
+    doctor.add_argument("--rule-file", action="append", default=[])
+
+    inspect = subparsers.add_parser("inspect", help="Summarize a snapshot or run record")
+    inspect_input = inspect.add_mutually_exclusive_group(required=True)
+    inspect_input.add_argument("--snapshot")
+    inspect_input.add_argument("--run-record")
+    inspect.add_argument("--format", choices=["json", "markdown"], default="markdown")
     return parser
 
 
@@ -58,6 +93,7 @@ def snapshot_command(args: argparse.Namespace) -> int:
     scope_hashes = compute_scope_hashes(entries_by_scope)
     slice_hashes = compute_slice_hashes(entries_by_scope)
     planned_gates = plan_gates(config, args.mode, entries_by_scope, args.final_pass)
+    repo_map = build_repo_map(repo, entries_by_scope, args.repo_map_limit) if args.include_repo_map else None
 
     snapshot_seed = {
         "mode": args.mode,
@@ -67,6 +103,9 @@ def snapshot_command(args: argparse.Namespace) -> int:
         "slice_hashes": slice_hashes,
         "config_hash": config_hash,
         "rule_hashes": rule_hashes,
+        "final_pass": args.final_pass,
+        "planned_gates": planned_gates,
+        "repo_map_hash": sha256_json(repo_map) if repo_map is not None else None,
     }
     snapshot_id = sha256_json(snapshot_seed)
     freshness = compute_freshness(
@@ -87,12 +126,15 @@ def snapshot_command(args: argparse.Namespace) -> int:
         "merge_base": merge_base,
         "config_hash": config_hash,
         "rule_hashes": rule_hashes,
+        "final_pass": args.final_pass,
         "scope_hashes": scope_hashes,
         "slice_hashes": slice_hashes,
         "entries": entries_by_scope,
         "planned_gates": planned_gates,
         **freshness,
     }
+    if repo_map is not None:
+        snapshot["repo_map"] = repo_map
 
     if args.write_run_record:
         run_id = make_run_id(snapshot_id)
@@ -192,6 +234,163 @@ def gate_command(args: argparse.Namespace) -> int:
     return exit_status
 
 
+def resolve_repo_file(repo: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else repo / path
+
+
+def init_command(args: argparse.Namespace) -> int:
+    repo = resolve_repo(args.repo)
+    text, source = read_adapter_config(args.adapter, repo)
+    output = resolve_repo_file(repo, args.output)
+    if output.exists() and not args.force:
+        raise WorkflowError(f"output already exists: {output}; pass --force to overwrite")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(text, encoding="utf-8", newline="\n")
+    print(json.dumps({
+        "adapter": args.adapter,
+        "source": source,
+        "output": str(output),
+        "status": "written",
+    }, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def list_adapters_command(args: argparse.Namespace) -> int:
+    repo = resolve_repo(args.repo) if args.repo else None
+    print(json.dumps({"adapters": discover_adapters(repo)}, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def validate_config_command(args: argparse.Namespace) -> int:
+    repo = resolve_repo(args.repo)
+    config_path = resolve_repo_file(repo, args.config)
+    config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+    summary = {
+        "valid": True,
+        "config": str(config_path),
+        "config_hash": config_hash,
+        "rule_hashes": rule_hashes,
+        "modes": sorted(config.get("modes", {})),
+        "slices": len(config.get("slices", [])),
+        "gates": [gate["id"] for gate in config.get("gates", [])],
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def validate_schema_command(args: argparse.Namespace) -> int:
+    repo = None
+    if args.repo:
+        repo = resolve_repo(args.repo)
+        path = resolve_repo_file(repo, args.file)
+    else:
+        path = Path(args.file).resolve()
+    result = validate_json_schema(args.schema, path, repo)
+    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if result["valid"] else 1
+
+
+def doctor_command(args: argparse.Namespace) -> int:
+    status: dict[str, Any] = {
+        "ok": True,
+        "errors": [],
+        "warnings": [],
+    }
+    repo: Path | None = None
+    try:
+        repo = resolve_repo(args.repo)
+        status["repo"] = str(repo)
+        version = run_git(repo, ["--version"], check=False).stdout.decode("utf-8", "replace").strip()
+        status["git"] = version
+    except ReviewFixLoopError as exc:
+        status["ok"] = False
+        status["errors"].append(str(exc))
+
+    if repo is not None and args.config:
+        try:
+            config_path = resolve_repo_file(repo, args.config)
+            config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+            status["config"] = str(config_path)
+            status["config_hash"] = config_hash
+            status["rule_hashes"] = rule_hashes
+            status["gates"] = len(config.get("gates", []))
+        except ReviewFixLoopError as exc:
+            status["ok"] = False
+            status["errors"].append(str(exc))
+
+    print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if status["ok"] else 1
+
+
+def inspect_summary(data: dict[str, Any], kind: str) -> dict[str, Any]:
+    if kind == "snapshot":
+        entries = data.get("entries", {})
+        return {
+            "kind": "snapshot",
+            "snapshot_id": data.get("snapshot_id"),
+            "mode": data.get("mode"),
+            "pass": data.get("pass"),
+            "final_pass": data.get("final_pass", False),
+            "entries": {scope: len(items) for scope, items in entries.items() if isinstance(items, list)},
+            "must_reload": data.get("must_reload", []),
+            "planned_gates": data.get("planned_gates", []),
+            "reloaded_slices": data.get("reloaded_slices", []),
+            "reused_slices": data.get("reused_slices", []),
+            "repo_map_files": len(data.get("repo_map", {}).get("files", [])) if isinstance(data.get("repo_map"), dict) else 0,
+        }
+    return {
+        "kind": "run-record",
+        "run_id": data.get("run_id"),
+        "snapshot_id": data.get("snapshot_id"),
+        "mode": data.get("mode"),
+        "pass": data.get("pass"),
+        "final_pass": data.get("final_pass", False),
+        "stop_decision": data.get("stop_decision"),
+        "planned_gates": data.get("planned_gates", []),
+        "gates": [
+            {"id": gate.get("id"), "status": gate.get("status"), "exit_code": gate.get("exit_code")}
+            for gate in data.get("gates", [])
+            if isinstance(gate, dict)
+        ],
+        "diagnostics": len(data.get("diagnostics", [])),
+    }
+
+
+def format_markdown_summary(summary: dict[str, Any]) -> str:
+    lines = [
+        f"# review-fix-loop {summary['kind']}",
+        "",
+    ]
+    for key, value in summary.items():
+        if key == "kind":
+            continue
+        if isinstance(value, list):
+            rendered = ", ".join(str(item) for item in value) if value else "-"
+        elif isinstance(value, dict):
+            rendered = ", ".join(f"{item_key}={item_value}" for item_key, item_value in value.items()) if value else "-"
+        else:
+            rendered = str(value)
+        lines.append(f"- {key}: {rendered}")
+    return "\n".join(lines)
+
+
+def inspect_command(args: argparse.Namespace) -> int:
+    if args.snapshot:
+        path = Path(args.snapshot)
+        data = read_json(path)
+        summary = inspect_summary(data, "snapshot")
+    else:
+        path = Path(args.run_record)
+        data = read_json(path)
+        summary = inspect_summary(data, "run-record")
+    if args.format == "json":
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(format_markdown_summary(summary))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -200,6 +399,18 @@ def main(argv: list[str] | None = None) -> int:
             return snapshot_command(args)
         if args.command == "gate":
             return gate_command(args)
+        if args.command == "init":
+            return init_command(args)
+        if args.command == "list-adapters":
+            return list_adapters_command(args)
+        if args.command == "validate-config":
+            return validate_config_command(args)
+        if args.command == "validate-schema":
+            return validate_schema_command(args)
+        if args.command == "doctor":
+            return doctor_command(args)
+        if args.command == "inspect":
+            return inspect_command(args)
         parser.error("unknown command")
         return 2
     except (ReviewFixLoopError, ConfigError, GitError, WorkflowError, ValueError) as exc:

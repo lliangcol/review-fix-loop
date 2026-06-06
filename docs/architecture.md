@@ -11,7 +11,11 @@ The `snapshot` command reads the live Git repository and produces structured met
 - untracked files;
 - large-merge branch diff from `merge_base..HEAD`.
 
-Entries include paths, status metadata, content hashes, binary markers, and slice assignment. They do not include full source text or full diffs.
+Entries include paths, status metadata, bounded content hashes, binary markers,
+slice assignment, and changed-line ranges for diagnostic filtering. They do not
+include full source text or full diffs. Worktree file hashes are bounded and
+sample both the beginning and end of very large files; symlinks are hashed by
+link target instead of following the target file.
 
 ## Slice Invalidation
 
@@ -31,7 +35,11 @@ The snapshot reports `must_reload`, `reloaded_slices`, `reused_slices`, and `reu
 
 Gate planning happens at snapshot time. Gates can target staged, unstaged, untracked, branch-diff, or all scopes. A gate runs only when the snapshot selected it, except for gates marked as final-pass checks.
 
-Gate execution verifies that the current gate config and rule files still match the snapshot. If they do not match, the gate command fails and requires a fresh snapshot.
+Gate execution verifies that the current gate config and rule files still match
+the snapshot. If they do not match, the gate command fails and requires a fresh
+snapshot. `filter_mode` is applied after parsing diagnostics, so adapters can
+use reviewdog-style file, added-line, and diff-context filtering without
+discarding tool-level failures.
 
 ## Run Records And Redaction
 
@@ -42,8 +50,14 @@ When `--write-run-record` is set, the run root receives:
 - `gates.json`
 - `summary.md`
 
-Run records keep metadata needed for the next pass: hashes, planned gates, diagnostics, fixes, stop decision, and residual risks. They avoid full source text, full diffs, secrets, and unredacted command output. They still contain project metadata such as paths, hashes, gate IDs, and diagnostic summaries.
+Run records keep metadata needed for the next pass: hashes, planned gates,
+diagnostics, fixes, stop decision, and residual risks. They avoid full source
+text, full diffs, secrets, and unredacted command output. Gate argv, summaries,
+diagnostics, and the persisted config copy are redacted before writing.
 
 ## Runtime Boundary
 
-The core package has no install-time dependencies and runs locally through the Python CLI. Adapters provide project-specific rule files, slices, and gate commands.
+The core package has no install-time dependencies and runs locally through the
+Python CLI. Adapters provide project-specific rule files, slices, and gate
+commands. Bundled templates and schemas are packaged with the wheel so `init`
+and `validate-schema` work from an installed CLI.

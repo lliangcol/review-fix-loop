@@ -34,12 +34,19 @@ Run these commands from this repository checkout, or from a target repository th
 python -m pip install -e ".[dev]"
 ```
 
+Initialize a target repository with the bundled generic adapter:
+
+```bash
+review-fix-loop init --repo . --output review-fix-loop.gates.json
+review-fix-loop validate-config --repo . --config review-fix-loop.gates.json
+```
+
 Create a pass 1 snapshot and write local run records:
 
 ```bash
 review-fix-loop snapshot \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --mode normal_loop \
   --pass 1 \
   --write-run-record \
@@ -51,7 +58,7 @@ Run gates selected by that snapshot:
 ```bash
 review-fix-loop gate \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --snapshot .review-fix-loop/runs/<run-id>/snapshot.json
 ```
 
@@ -60,7 +67,7 @@ After fixing code, create pass 2 from the previous run record:
 ```bash
 review-fix-loop snapshot \
   --repo . \
-  --config adapters/generic/gates.json \
+  --config review-fix-loop.gates.json \
   --mode normal_loop \
   --pass 2 \
   --previous-run-record .review-fix-loop/runs/<run-id>/run-record.json \
@@ -69,6 +76,14 @@ review-fix-loop snapshot \
 ```
 
 Reusing pass 1 diff text or pass 1 findings without this fresh snapshot is an invalid workflow.
+
+Useful local inspection commands:
+
+```bash
+review-fix-loop doctor --repo . --config review-fix-loop.gates.json
+review-fix-loop inspect --snapshot .review-fix-loop/runs/<run-id>/snapshot.json
+review-fix-loop validate-schema --schema snapshot --file .review-fix-loop/runs/<run-id>/snapshot.json
+```
 
 ## Who It Is For
 
@@ -84,6 +99,7 @@ live Git worktree -> snapshot -> agent review -> fixes -> gates -> fresh snapsho
 ```
 
 Snapshots separate staged, unstaged, untracked, and branch-diff scopes. Slices are invalidated when their hashes, rule files, or gate config change. Run records keep durable metadata while avoiding full source text, full diffs, secrets, and unredacted command output.
+Gate diagnostics can be filtered to changed files, added lines, or diff context lines, and parsers support exit code, `git diff --check`, regex lines, JSON diagnostics, RDJSON, SARIF, and Checkstyle XML.
 
 ## Current Boundaries
 
