@@ -86,7 +86,7 @@ def safe_snapshot_path(repo: Path, path: str) -> Path:
 def run_untracked_whitespace_builtin(repo: Path, snapshot: dict[str, Any]) -> tuple[int, str, str]:
     diagnostics = []
     for entry in snapshot.get("entries", {}).get("untracked", []):
-        if entry.get("deleted") or entry.get("binary"):
+        if entry.get("deleted") or entry.get("binary") or entry.get("symlink"):
             continue
         path = entry.get("path")
         if not isinstance(path, str) or not path:
@@ -226,6 +226,26 @@ def filter_diagnostics(gate: dict[str, Any], snapshot: dict[str, Any], diagnosti
     return kept, len(diagnostics) - len(kept)
 
 
+def slice_by_path_map(snapshot: dict[str, Any]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for scope_entries in snapshot.get("entries", {}).values():
+        if not isinstance(scope_entries, list):
+            continue
+        for entry in scope_entries:
+            path = entry.get("path")
+            slice_id = entry.get("slice")
+            if isinstance(path, str) and path and isinstance(slice_id, str):
+                mapping.setdefault(normalize_repo_path(path), slice_id)
+    return mapping
+
+
+def attach_diagnostic_slices(diagnostics: list[dict[str, Any]], slice_by_path: dict[str, str]) -> None:
+    for diagnostic in diagnostics:
+        file_name = diagnostic.get("file")
+        if diagnostic.get("slice") is None and isinstance(file_name, str) and file_name:
+            diagnostic["slice"] = slice_by_path.get(normalize_repo_path(file_name))
+
+
 def resolve_record_update_path(snapshot: dict[str, Any], snapshot_path: Path) -> Path:
     run_record_path = snapshot.get("run_record_path")
     if not run_record_path:
@@ -241,6 +261,7 @@ def resolve_record_update_path(snapshot: dict[str, Any], snapshot_path: Path) ->
 
 def run_planned_gates(repo: Path, config: dict[str, Any], snapshot: dict[str, Any], snapshot_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     gate_by_id = {gate["id"]: gate for gate in config.get("gates", [])}
+    slice_by_path = slice_by_path_map(snapshot)
     results = []
     diagnostics = []
     exit_status = 0
@@ -279,6 +300,7 @@ def run_planned_gates(repo: Path, config: dict[str, Any], snapshot: dict[str, An
 
         raw_gate_diagnostics = parse_gate_output(gate, stdout, stderr, exit_code)
         gate_diagnostics, filtered_count = filter_diagnostics(gate, snapshot, raw_gate_diagnostics)
+        attach_diagnostic_slices(gate_diagnostics, slice_by_path)
         fail_level = gate.get("fail_level", "error")
         blocking = bool(gate.get("blocking", True))
         diag_blocks = any(

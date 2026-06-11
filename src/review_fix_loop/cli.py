@@ -41,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--config", required=True)
     gate.add_argument("--snapshot", required=True)
     gate.add_argument("--rule-file", action="append", default=[])
+    gate.add_argument(
+        "--require-fresh-tree",
+        action="store_true",
+        help="Fail if the working tree no longer matches the snapshot scope hashes. "
+        "Leave off when gates intentionally run after fixes were applied.",
+    )
 
     init = subparsers.add_parser("init", help="Create an adapter config in a target repo")
     init.add_argument("--repo", required=True)
@@ -85,7 +91,9 @@ def snapshot_command(args: argparse.Namespace) -> int:
     if not config_path.is_absolute():
         config_path = repo / config_path
     config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
-    mode_config = config["modes"][args.mode]
+    mode_config = config["modes"].get(args.mode)
+    if mode_config is None:
+        raise ConfigError(f"mode is not defined in config: {args.mode}")
     baseline = args.baseline or mode_config.get("baseline")
     mode_scopes = mode_config.get("scope", [])
     merge_base, entries_by_scope = collect_scopes(repo, args.mode, baseline, mode_scopes)
@@ -229,9 +237,23 @@ def gate_command(args: argparse.Namespace) -> int:
         raise WorkflowError("effective config hash differs from snapshot config_hash; create a fresh snapshot")
     if snapshot.get("rule_hashes", {}) != rule_hashes:
         raise WorkflowError("rule file hashes differ from snapshot rule_hashes; create a fresh snapshot")
+    if args.require_fresh_tree:
+        verify_fresh_tree(repo, config, snapshot)
     results, diagnostics, exit_status = run_planned_gates(repo, config, snapshot, snapshot_path)
     print(json.dumps({"gates": results, "diagnostics": diagnostics}, ensure_ascii=False, indent=2, sort_keys=True))
     return exit_status
+
+
+def verify_fresh_tree(repo: Path, config: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    mode = snapshot.get("mode")
+    mode_config = config.get("modes", {}).get(mode)
+    if not isinstance(mode_config, dict):
+        raise WorkflowError(f"snapshot mode is not defined in config: {mode}")
+    baseline = snapshot.get("baseline") or mode_config.get("baseline")
+    _, entries_by_scope = collect_scopes(repo, mode, baseline, mode_config.get("scope", []))
+    attach_slices(entries_by_scope, config.get("slices", []))
+    if compute_scope_hashes(entries_by_scope) != snapshot.get("scope_hashes"):
+        raise WorkflowError("working tree changed since snapshot; create a fresh snapshot")
 
 
 def resolve_repo_file(repo: Path, value: str) -> Path:

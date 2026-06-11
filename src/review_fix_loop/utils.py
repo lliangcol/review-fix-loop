@@ -6,7 +6,7 @@ import json
 import os
 import re
 from collections.abc import Mapping, Sequence
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Iterable
 
 
@@ -108,21 +108,13 @@ def matches_any(path: str, patterns: Iterable[str]) -> bool:
     return any(glob_to_regex(pattern).match(normalized) for pattern in patterns)
 
 
-def ensure_list(value: Any, field: str) -> list[Any]:
-    if not isinstance(value, list):
-        raise TypeError(f"{field} must be a list")
-    return value
-
-
-def relpath(path: Path, root: Path) -> str:
-    return PurePosixPath(path.resolve().relative_to(root.resolve()).as_posix()).as_posix()
-
-
 def truncate_text(text: str, limit_bytes: int = DEFAULT_STREAM_LIMIT_BYTES) -> str:
     encoded = text.encode("utf-8", "surrogateescape")
     if len(encoded) <= limit_bytes:
         return text
-    clipped = encoded[:limit_bytes].decode("utf-8", "surrogateescape")
+    # Decode with "ignore" so a multibyte sequence cut by the byte limit cannot
+    # leave lone surrogates that later fail UTF-8 serialization.
+    clipped = encoded[:limit_bytes].decode("utf-8", "ignore")
     return clipped + f"\n[truncated to {limit_bytes} bytes]"
 
 

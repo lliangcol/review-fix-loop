@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConfigError
-from .utils import normalize_repo_path, sha256_json, sha256_text, stable_json
+from .utils import normalize_repo_path, sha256_json, sha256_text
 
 VALID_SCOPES = {"staged", "unstaged", "untracked", "merge_base_to_head", "all"}
 VALID_MODES = {"normal_loop", "large_merge"}
@@ -139,6 +139,12 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError(f"gate {gate_id} has invalid filter_mode")
         if gate.get("fail_level", "error") not in VALID_FAIL_LEVELS:
             raise ConfigError(f"gate {gate_id} has invalid fail_level")
+        timeout = gate.get("timeout_seconds", 60)
+        if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+            raise ConfigError(f"gate {gate_id} timeout_seconds must be an integer >= 1")
+        for flag in ("blocking", "final_always"):
+            if flag in gate and not isinstance(gate[flag], bool):
+                raise ConfigError(f"gate {gate_id} {flag} must be a boolean")
         if "modes" in gate:
             if not isinstance(gate["modes"], list) or not all(mode in VALID_MODES for mode in gate["modes"]):
                 raise ConfigError(f"gate {gate_id} modes must reference valid modes")
@@ -168,7 +174,3 @@ def validate_config(config: dict[str, Any]) -> None:
                 raise ConfigError(f"gate {gate_id} regex-lines parser pattern is invalid: {exc}") from exc
             if parser.get("severity", "error") not in {"info", "warning", "error"}:
                 raise ConfigError(f"gate {gate_id} regex-lines parser severity is invalid")
-
-
-def config_for_hash(config: dict[str, Any]) -> str:
-    return stable_json(config)

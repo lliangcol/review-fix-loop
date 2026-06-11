@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,9 @@ from .utils import redact_data
 
 
 def make_run_id(snapshot_id: str) -> str:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # Microseconds keep run ids unique when the same snapshot is written
+    # more than once within a second.
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     short_hash = snapshot_id.split(":", 1)[-1][:8]
     return f"{timestamp}-{short_hash}"
 
@@ -27,9 +30,16 @@ def resolve_run_root(repo: Path, cache_dir: str | None, run_id: str) -> Path:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
+    # Write to a sibling temp file and replace atomically so a failed dump
+    # cannot leave a truncated JSON file behind.
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 def read_json(path: Path) -> dict[str, Any]:

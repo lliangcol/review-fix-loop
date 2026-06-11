@@ -30,15 +30,13 @@ def python_symbols(path: Path) -> list[dict[str, Any]]:
 
 
 def build_repo_map(repo: Path, entries_by_scope: dict[str, list[dict[str, Any]]], max_files: int = 40) -> dict[str, Any]:
-    paths = changed_snapshot_paths(entries_by_scope)
+    paths = [path for path in changed_snapshot_paths(entries_by_scope) if path.endswith(".py")]
     files = []
     truncated = False
     for path in paths:
         if len(files) >= max_files:
             truncated = True
             break
-        if not path.endswith(".py"):
-            continue
         absolute = repo / path
         if not absolute.exists() or not absolute.is_file() or absolute.stat().st_size > 1_000_000:
             continue

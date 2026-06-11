@@ -7,7 +7,12 @@ This page summarizes the behavior covered by the current test suite and contract
 - Pass 2 and later require `--previous-run-record`.
 - Changed slice hashes mark slices as forbidden for reuse.
 - Previous fixes and unresolved diagnostics can force a slice to be reloaded.
+  Gate diagnostics are attributed to slices by file path, so a failing gate on
+  an unchanged slice still forbids reuse on the next pass.
 - Config hash and rule file hash changes require a fresh snapshot before gates run.
+- `gate --require-fresh-tree` optionally fails when the working tree no longer
+  matches the snapshot scope hashes. Leave it off when gates intentionally run
+  after fixes were applied (the standard loop order).
 
 ## Git Snapshot Semantics
 
