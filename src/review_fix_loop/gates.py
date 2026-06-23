@@ -19,6 +19,12 @@ from .errors import ConfigError, WorkflowError
 from .run_record import read_json, write_json
 from .utils import matches_any, normalize_repo_path, redact_data, redact_text, truncate_text
 
+# Canonical set of in-process gate commands. config.validate_config rejects any
+# "__builtin__:" argv that is not listed here, so keep this the single source of
+# truth for both validation and dispatch.
+BUILTIN_GATE_COMMANDS = frozenset({"__builtin__:untracked-whitespace", "__builtin__:policy"})
+BUILTIN_PREFIX = "__builtin__:"
+
 
 def changed_paths_for_scope(entries_by_scope: dict[str, list[dict[str, Any]]], scope: str) -> list[str]:
     if scope == "all":

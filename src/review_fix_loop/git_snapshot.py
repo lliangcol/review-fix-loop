@@ -158,7 +158,8 @@ def merge_ranges(ranges: list[list[int]]) -> list[list[int]]:
     if not ranges:
         return []
     ordered = sorted(ranges, key=lambda item: (item[0], item[1]))
-    merged = [ordered[0]]
+    # Copy the first range so callers' input lists are never mutated in place.
+    merged = [list(ordered[0])]
     for start, end in ordered[1:]:
         current = merged[-1]
         if start <= current[1] + 1:
@@ -320,6 +321,8 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
         if entry.get("deleted"):
             entry["binary"] = False
             entry["content_hash"] = None
+            entry["changed_lines"] = []
+            entry["diff_context_lines"] = []
             continue
         blob = head_blob_id(repo, entry["path"])
         entry["blob_id"] = blob
@@ -332,7 +335,7 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
 def collect_scopes(repo: Path, mode: str, baseline: str | None, mode_scopes: list[str]) -> tuple[str | None, dict[str, list[dict[str, Any]]]]:
     entries_by_scope = {scope: [] for scope in SCOPES}
     merge_base = None
-    if "merge_base_to_head" in mode_scopes or mode == "large_merge":
+    if "merge_base_to_head" in mode_scopes:
         merge_base, entries_by_scope["merge_base_to_head"] = collect_merge_base_to_head(repo, baseline)
     if "staged" in mode_scopes:
         entries_by_scope["staged"] = collect_staged(repo)

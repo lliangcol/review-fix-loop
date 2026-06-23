@@ -52,24 +52,16 @@ def stream_file_hash(path: Path, limit_bytes: int | None = None) -> tuple[str, b
                     digest.update(handle.read(tail_size))
             return "sha256-sample:" + digest.hexdigest(), True
 
+    # Files within the limit are hashed in full; oversized files are handled by
+    # the sampling branch above, so this path never truncates.
     digest = hashlib.sha256()
-    total = 0
-    truncated = False
     with path.open("rb") as handle:
         while True:
             chunk = handle.read(1024 * 1024)
             if not chunk:
                 break
-            total += len(chunk)
-            if limit_bytes is not None and total > limit_bytes:
-                remaining = len(chunk) - (total - limit_bytes)
-                if remaining > 0:
-                    digest.update(chunk[:remaining])
-                truncated = True
-                break
             digest.update(chunk)
-    prefix = "sha256-prefix:" if truncated else "sha256:"
-    return prefix + digest.hexdigest(), truncated
+    return "sha256:" + digest.hexdigest(), False
 
 
 def is_probably_binary(path: Path) -> bool:

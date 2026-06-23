@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import ConfigError
+from .gates import BUILTIN_GATE_COMMANDS, BUILTIN_PREFIX
 from .utils import normalize_repo_path, sha256_json, sha256_text
 
 VALID_SCOPES = {"staged", "unstaged", "untracked", "merge_base_to_head", "all"}
@@ -102,6 +103,19 @@ def validate_config(config: dict[str, Any]) -> None:
         for item in scope:
             if item not in VALID_SCOPES:
                 raise ConfigError(f"invalid scope in mode {mode_id}: {item}")
+        if "baseline" in mode and not isinstance(mode["baseline"], str):
+            raise ConfigError(f"mode {mode_id} baseline must be a string")
+        # Advisory large-merge contract fields: validated and recorded in the
+        # config hash, but honored by the agent/skill rather than enforced by
+        # the CLI itself. See docs/architecture.md.
+        for flag in ("require_fresh_snapshot", "require_risk_slices", "require_invariant_checks", "require_residual_risk_report"):
+            if flag in mode and not isinstance(mode[flag], bool):
+                raise ConfigError(f"mode {mode_id} {flag} must be a boolean")
+        for limit_field in ("max_deep_review_files", "max_diff_bytes_per_slice"):
+            if limit_field in mode:
+                value = mode[limit_field]
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ConfigError(f"mode {mode_id} {limit_field} must be an integer >= 1")
 
     seen_slices = set()
     for item in slices:
@@ -132,6 +146,9 @@ def validate_config(config: dict[str, Any]) -> None:
         argv = gate.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
             raise ConfigError(f"gate {gate_id} argv must be a non-empty string list")
+        if argv[0].startswith(BUILTIN_PREFIX) and argv[0] not in BUILTIN_GATE_COMMANDS:
+            known = ", ".join(sorted(BUILTIN_GATE_COMMANDS))
+            raise ConfigError(f"gate {gate_id} references unknown builtin command: {argv[0]} (known builtins: {known})")
         scope = gate.get("scope")
         if scope not in VALID_SCOPES:
             raise ConfigError(f"gate {gate_id} has invalid scope: {scope}")

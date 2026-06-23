@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 
 from review_fix_loop.cli import main
+from review_fix_loop.errors import GitError
+from review_fix_loop.git_snapshot import collect_merge_base_to_head, collect_scopes
 from review_fix_loop.gates import run_untracked_whitespace_builtin
 from review_fix_loop.repo_map import build_repo_map
 from review_fix_loop.run_record import write_json
@@ -264,6 +266,82 @@ def test_repeated_run_records_use_distinct_run_directories(capsys, tmp_path: Pat
 
     assert first["snapshot_id"] == second["snapshot_id"]
     assert first["run_record_path"] != second["run_record_path"]
+
+
+def test_large_merge_mode_without_branch_scope_skips_merge_base(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    # The mode name alone must not force merge_base_to_head collection nor
+    # require a baseline when the mode scope does not request the branch diff.
+    merge_base, entries = collect_scopes(repo, "large_merge", None, ["staged"])
+
+    assert merge_base is None
+    assert entries["merge_base_to_head"] == []
+
+    # When the scope does request the branch diff, a missing baseline is still
+    # rejected.
+    with pytest.raises(GitError):
+        collect_scopes(repo, "large_merge", None, ["merge_base_to_head", "staged"])
+
+
+def test_merge_base_deleted_entry_includes_line_range_keys(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    git(repo, "branch", "base")
+    git(repo, "rm", "src/app.py")
+    git(repo, "commit", "-m", "delete app")
+
+    _, entries = collect_merge_base_to_head(repo, "base")
+    deleted = [entry for entry in entries if entry["path"] == "src/app.py"]
+
+    assert deleted and deleted[0]["deleted"] is True
+    # Deleted branch-diff entries must carry the same line-range keys as every
+    # other scope so entry shapes stay consistent across scopes.
+    assert deleted[0]["changed_lines"] == []
+    assert deleted[0]["diff_context_lines"] == []
+
+
+def test_unknown_builtin_gate_is_rejected_at_config_time(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    # A typo in a builtin name must surface as a config error, not as an opaque
+    # "could not execute" failure at gate runtime.
+    config = write_config(repo, [
+        {
+            "id": "typo-builtin",
+            "argv": ["__builtin__:untracked-whitepace"],
+            "scope": "untracked",
+            "parser": {"type": "git-diff-check"},
+        }
+    ])
+
+    code = main(["validate-config", "--repo", str(repo), "--config", str(config)])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "unknown builtin command: __builtin__:untracked-whitepace" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_known_builtin_gates_pass_config_validation(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [
+        {
+            "id": "untracked-ws",
+            "argv": ["__builtin__:untracked-whitespace"],
+            "scope": "untracked",
+            "parser": {"type": "git-diff-check"},
+        },
+        {
+            "id": "policy-check",
+            "argv": ["__builtin__:policy"],
+            "scope": "all",
+            "policy": {"forbid_changed_paths": ["secrets/**"]},
+            "parser": {"type": "json-diagnostics"},
+        },
+    ])
+
+    code = main(["validate-config", "--repo", str(repo), "--config", str(config)])
+    captured = capsys.readouterr()
+
+    assert code == 0, captured.err
 
 
 def test_gate_require_fresh_tree_detects_worktree_change(capsys, tmp_path: Path) -> None:

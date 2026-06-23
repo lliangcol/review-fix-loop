@@ -21,7 +21,13 @@
             "items": {
               "enum": ["staged", "unstaged", "untracked", "merge_base_to_head", "all"]
             }
-          }
+          },
+          "require_fresh_snapshot": { "type": "boolean" },
+          "require_risk_slices": { "type": "boolean" },
+          "require_invariant_checks": { "type": "boolean" },
+          "require_residual_risk_report": { "type": "boolean" },
+          "max_deep_review_files": { "type": "integer", "minimum": 1 },
+          "max_diff_bytes_per_slice": { "type": "integer", "minimum": 1 }
         }
       }
     },

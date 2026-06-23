@@ -41,6 +41,16 @@ snapshot. `filter_mode` is applied after parsing diagnostics, so adapters can
 use reviewdog-style file, added-line, and diff-context filtering without
 discarding tool-level failures.
 
+## Advisory Mode Fields
+
+Modes may carry contract hints such as `require_fresh_snapshot`,
+`require_risk_slices`, `require_invariant_checks`,
+`require_residual_risk_report`, `max_deep_review_files`, and
+`max_diff_bytes_per_slice`. These are validated and folded into the config hash,
+but they are **advisory**: the reviewing agent and skill honor them, while the
+CLI itself does not mechanically enforce them. The CLI only enforces the
+fresh-snapshot, slice-invalidation, and gate contracts described above.
+
 ## Run Records And Redaction
 
 When `--write-run-record` is set, the run root receives:
