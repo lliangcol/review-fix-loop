@@ -173,15 +173,21 @@ def parse_diff_line_ranges(diff_output: bytes) -> tuple[list[list[int]], list[li
     added_lines: list[int] = []
     context_ranges: list[list[int]] = []
     new_line = 0
+    in_hunk = False
     for line_text in diff_output.decode("utf-8", "replace").splitlines():
         match = re.match(r"^@@ -\d+(?:,\d+)? \+(?P<start>\d+)(?:,(?P<count>\d+))? @@", line_text)
         if match:
+            in_hunk = True
             new_line = int(match.group("start"))
             count = int(match.group("count") or "1")
             if count > 0:
                 context_ranges.append([new_line, new_line + count - 1])
             continue
-        if line_text.startswith("+++") or line_text.startswith("---"):
+        if not in_hunk:
+            # Skip the file-header preamble ("diff --git", "index", "--- a/...",
+            # "+++ b/..."). Inside a hunk every line is prefixed by exactly one
+            # marker char, so a content line such as "++x" (rendered "+++x") must
+            # be classified as added, not mistaken for the "+++ b/..." header.
             continue
         if line_text.startswith("+"):
             added_lines.append(new_line)

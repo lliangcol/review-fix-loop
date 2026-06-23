@@ -343,6 +343,31 @@ def test_baseline_omitted_when_mode_does_not_use_merge_base_scope(capsys, tmp_pa
     assert snapshot["merge_base"] is None
 
 
+def test_diff_line_ranges_handle_content_line_starting_with_plus_plus() -> None:
+    from review_fix_loop.git_snapshot import parse_diff_line_ranges
+
+    # A column-0 added line whose content begins with "++" renders as "+++..."
+    # in unified diff. It must be counted as added (and advance the new-line
+    # counter), not mistaken for the "+++ b/file" header. Otherwise filter_mode
+    # "added" silently drops findings on genuinely-added lines.
+    diff = (
+        b"diff --git a/f.txt b/f.txt\n"
+        b"index 0000000..1111111 100644\n"
+        b"--- a/f.txt\n"
+        b"+++ b/f.txt\n"
+        b"@@ -1,1 +1,4 @@\n"
+        b" line1\n"
+        b"+++injected\n"
+        b"+after_a\n"
+        b"+after_b\n"
+    )
+    added, context = parse_diff_line_ranges(diff)
+
+    # Added new-file lines are 2 ("++injected"), 3 ("after_a"), 4 ("after_b").
+    assert added == [[2, 4]]
+    assert context == [[1, 4]]
+
+
 def test_unknown_builtin_gate_is_rejected_at_config_time(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     # A typo in a builtin name must surface as a config error, not as an opaque
