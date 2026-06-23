@@ -299,6 +299,50 @@ def test_merge_base_deleted_entry_includes_line_range_keys(tmp_path: Path) -> No
     assert deleted[0]["diff_context_lines"] == []
 
 
+def test_baseline_recorded_for_any_mode_using_merge_base_scope(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    # A non-large_merge mode is allowed to declare merge_base_to_head scope.
+    # Branch off, then advance HEAD so the branch diff is non-empty.
+    git(repo, "branch", "base")
+    (repo / "src" / "app.py").write_text("print('changed')\n", encoding="utf-8")
+    git(repo, "commit", "-am", "change app")
+
+    config = write_config(repo, [
+        {
+            "id": "echo-baseline",
+            "argv": ["__builtin__:policy"],
+            "scope": "all",
+            "policy": {},
+            "parser": {"type": "json-diagnostics"},
+        }
+    ], modes={
+        "normal_loop": {"baseline": "base", "scope": ["merge_base_to_head", "staged"]},
+    })
+
+    snapshot = run_snapshot(capsys, repo, config, tmp_path / "cache")
+
+    # The baseline must be keyed off the scope, not the mode name: it feeds the
+    # snapshot id and gate {baseline} expansion whenever the branch diff runs.
+    assert snapshot["baseline"] == "base"
+    assert snapshot["merge_base"]
+
+
+def test_baseline_omitted_when_mode_does_not_use_merge_base_scope(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    # A stray baseline in a mode that never collects the branch diff must not
+    # leak into the snapshot record.
+    config = write_config(repo, [
+        {"id": "noop", "argv": ["__builtin__:policy"], "scope": "all", "policy": {}, "parser": {"type": "json-diagnostics"}}
+    ], modes={
+        "normal_loop": {"baseline": "main", "scope": ["staged", "unstaged", "untracked"]},
+    })
+
+    snapshot = run_snapshot(capsys, repo, config, tmp_path / "cache")
+
+    assert snapshot["baseline"] is None
+    assert snapshot["merge_base"] is None
+
+
 def test_unknown_builtin_gate_is_rejected_at_config_time(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     # A typo in a builtin name must surface as a config error, not as an opaque

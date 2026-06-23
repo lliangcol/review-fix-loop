@@ -96,6 +96,11 @@ def snapshot_command(args: argparse.Namespace) -> int:
         raise ConfigError(f"mode is not defined in config: {args.mode}")
     baseline = args.baseline or mode_config.get("baseline")
     mode_scopes = mode_config.get("scope", [])
+    # The baseline is only meaningful when the branch diff is actually collected.
+    # Key off the scope (not the mode name) so any mode that declares
+    # merge_base_to_head records its baseline in the snapshot id and gate args.
+    uses_merge_base = "merge_base_to_head" in mode_scopes
+    recorded_baseline = baseline if uses_merge_base else None
     merge_base, entries_by_scope = collect_scopes(repo, args.mode, baseline, mode_scopes)
     attach_slices(entries_by_scope, config.get("slices", []))
     scope_hashes = compute_scope_hashes(entries_by_scope)
@@ -105,7 +110,7 @@ def snapshot_command(args: argparse.Namespace) -> int:
 
     snapshot_seed = {
         "mode": args.mode,
-        "baseline": baseline if args.mode == "large_merge" else None,
+        "baseline": recorded_baseline,
         "merge_base": merge_base,
         "scope_hashes": scope_hashes,
         "slice_hashes": slice_hashes,
@@ -130,7 +135,7 @@ def snapshot_command(args: argparse.Namespace) -> int:
         "pass": args.pass_number,
         "snapshot_id": snapshot_id,
         "previous_snapshot_id": freshness.get("previous_snapshot_id"),
-        "baseline": baseline if args.mode == "large_merge" else None,
+        "baseline": recorded_baseline,
         "merge_base": merge_base,
         "config_hash": config_hash,
         "rule_hashes": rule_hashes,

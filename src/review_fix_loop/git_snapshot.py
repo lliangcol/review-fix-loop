@@ -310,7 +310,7 @@ def collect_untracked(repo: Path) -> list[dict[str, Any]]:
 
 def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, list[dict[str, Any]]]:
     if not baseline:
-        raise GitError("large_merge mode requires a baseline")
+        raise GitError("merge_base_to_head scope requires a baseline")
     merge_base_result = run_git(repo, ["merge-base", baseline, "HEAD"])
     merge_base = merge_base_result.stdout.decode("utf-8", "replace").strip()
     if not merge_base:
