@@ -42,6 +42,17 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def write_text_atomic(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(path.name + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def read_json(path: Path) -> dict[str, Any]:
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -65,6 +76,11 @@ def build_run_record(snapshot: dict[str, Any], run_id: str) -> dict[str, Any]:
         "previous_snapshot_id": snapshot.get("previous_snapshot_id"),
         "config_hash": snapshot["config_hash"],
         "rule_hashes": snapshot["rule_hashes"],
+        "config_sources": snapshot.get("config_sources", []),
+        "local_override_applied": snapshot.get("local_override_applied", False),
+        "local_override_available": snapshot.get("local_override_available", False),
+        "local_override_disabled": snapshot.get("local_override_disabled", False),
+        "local_override_path": snapshot.get("local_override_path"),
         "final_pass": snapshot.get("final_pass", False),
         "scope_hashes": snapshot["scope_hashes"],
         "slice_hashes": snapshot["slice_hashes"],
@@ -92,8 +108,10 @@ def write_run_outputs(run_root: Path, snapshot: dict[str, Any], run_record: dict
         f"Mode: {snapshot['mode']}\n"
         f"Pass: {snapshot['pass']}\n"
         f"Snapshot: {snapshot['snapshot_id']}\n"
+        f"Config sources: {', '.join(snapshot.get('config_sources', []))}\n"
+        f"Local override applied: {snapshot.get('local_override_applied', False)}\n"
         f"Must reload: {', '.join(snapshot.get('must_reload', []))}\n"
         f"Planned gates: {', '.join(snapshot.get('planned_gates', []))}\n"
     )
-    (run_root / "summary.md").write_text(summary, encoding="utf-8", newline="\n")
+    write_text_atomic(run_root / "summary.md", summary)
     return snapshot_path, run_record_path

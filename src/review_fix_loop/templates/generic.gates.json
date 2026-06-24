@@ -9,9 +9,12 @@
     "large_merge": {
       "baseline": "origin/main",
       "scope": ["merge_base_to_head", "staged", "unstaged", "untracked"],
+      "requires_merge_base": true,
+      "requires_residual_risk_report": true,
       "require_risk_slices": true,
       "require_invariant_checks": true,
       "require_residual_risk_report": true,
+      "max_changed_files": 80,
       "max_deep_review_files": 80,
       "max_diff_bytes_per_slice": 250000
     }
@@ -48,6 +51,13 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "read-only git diff whitespace check",
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }
@@ -61,6 +71,13 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "read-only git diff whitespace check",
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }
@@ -74,6 +91,8 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }

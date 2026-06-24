@@ -11,8 +11,9 @@ import pytest
 
 from review_fix_loop.cli import main
 from review_fix_loop.errors import GitError
-from review_fix_loop.git_snapshot import collect_merge_base_to_head, collect_scopes
-from review_fix_loop.gates import run_untracked_whitespace_builtin
+from review_fix_loop import git_snapshot
+from review_fix_loop.git_snapshot import chunk_git_paths, collect_merge_base_to_head, collect_scopes
+from review_fix_loop.gates import MAX_GATE_CAPTURE_BYTES, run_untracked_whitespace_builtin
 from review_fix_loop.repo_map import build_repo_map
 from review_fix_loop.run_record import write_json
 from review_fix_loop.utils import truncate_text
@@ -100,6 +101,66 @@ def test_gate_with_large_multibyte_output_keeps_run_record_valid(capsys, tmp_pat
     assert code == 0, captured.err
     record = json.loads(Path(snap["run_record_path"]).read_text(encoding="utf-8"))
     assert record["gates"][0]["status"] == "passed"
+
+
+def test_gate_large_output_is_bounded_before_summary(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    emit = (
+        "import sys; "
+        f"sys.stdout.buffer.write(b'a' * ({MAX_GATE_CAPTURE_BYTES} - 1) + '中'.encode('utf-8'))"
+    )
+    config = write_config(repo, [
+        {
+            "id": "bounded-output",
+            "argv": [sys.executable, "-c", emit],
+            "scope": "all",
+            "final_always": True,
+            "parser": {"type": "exit-code"},
+        }
+    ])
+    snap = run_snapshot(capsys, repo, config, tmp_path / "cache", "--final-pass")
+
+    code = main(["gate", "--repo", str(repo), "--config", str(config), "--snapshot", snap["snapshot_path"]])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert code == 0, captured.err
+    gate = result["gates"][0]
+    assert gate["stdout_truncated"] is True
+    assert gate["stdout_bytes"] == MAX_GATE_CAPTURE_BYTES + 2
+    gate["stdout_summary"].encode("utf-8")
+    assert "\udce4" not in gate["stdout_summary"]
+
+
+def test_truncated_non_exit_parser_is_explicit_diagnostic(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    emit = (
+        "import sys; "
+        f"sys.stdout.buffer.write(b'x' * ({MAX_GATE_CAPTURE_BYTES} + 1))"
+    )
+    config = write_config(repo, [
+        {
+            "id": "truncated-regex",
+            "argv": [sys.executable, "-c", emit],
+            "scope": "all",
+            "final_always": True,
+            "blocking": True,
+            "parser": {
+                "type": "regex-lines",
+                "pattern": "^(?P<message>.*)$",
+                "severity": "warning",
+            },
+        }
+    ])
+    snap = run_snapshot(capsys, repo, config, tmp_path / "cache", "--final-pass")
+
+    code = main(["gate", "--repo", str(repo), "--config", str(config), "--snapshot", snap["snapshot_path"]])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert code == 1
+    assert result["gates"][0]["stdout_truncated"] is True
+    assert any(diagnostic["rule"] == "output-truncated" for diagnostic in result["diagnostics"])
 
 
 def test_write_json_failure_keeps_previous_file_intact(tmp_path: Path) -> None:
@@ -443,3 +504,40 @@ def test_gate_require_fresh_tree_detects_worktree_change(capsys, tmp_path: Path)
 
     assert code == 1
     assert "working tree changed since snapshot" in captured.err
+
+
+def test_staged_line_ranges_use_one_batched_diff(capsys, monkeypatch, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [])
+    for index in range(5):
+        path = repo / "src" / f"file_{index}.py"
+        path.write_text(f"print({index})\n", encoding="utf-8")
+        git(repo, "add", str(path.relative_to(repo)))
+
+    original_run_git = git_snapshot.run_git
+    unified_diff_calls = 0
+
+    def counting_run_git(repo_path: Path, args: list[str], check: bool = True):
+        nonlocal unified_diff_calls
+        if args[:2] == ["diff", "--cached"] and "--unified=3" in args:
+            unified_diff_calls += 1
+        return original_run_git(repo_path, args, check=check)
+
+    monkeypatch.setattr(git_snapshot, "run_git", counting_run_git)
+
+    snapshot = run_snapshot(capsys, repo, config, tmp_path / "cache")
+
+    assert unified_diff_calls == 1
+    assert len(snapshot["entries"]["staged"]) == 5
+
+
+def test_git_path_chunks_preserve_order_and_bound_arg_size() -> None:
+    paths = ["a" * 9, "b" * 9, "c" * 9, "d" * 30]
+
+    chunks = chunk_git_paths(paths, max_arg_bytes=20)
+
+    assert [path for chunk in chunks for path in chunk] == paths
+    assert chunks[-1] == ["d" * 30]
+    for chunk in chunks:
+        total = sum(len(path.encode("utf-8", "surrogateescape")) + 1 for path in chunk)
+        assert total <= 20 or len(chunk) == 1

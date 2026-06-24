@@ -1,0 +1,1 @@
+"""Typed internal domain helpers."""

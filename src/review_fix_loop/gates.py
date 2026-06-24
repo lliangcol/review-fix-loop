@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-import subprocess
+from concurrent.futures import ThreadPoolExecutor
+# Gate commands run locally with shell=False and explicit argv.
+import subprocess  # nosec B404
 import time
 from pathlib import Path
+from tempfile import SpooledTemporaryFile
 from typing import Any
 
 from .diagnostics import (
@@ -24,6 +27,7 @@ from .utils import matches_any, normalize_repo_path, redact_data, redact_text, t
 # truth for both validation and dispatch.
 BUILTIN_GATE_COMMANDS = frozenset({"__builtin__:untracked-whitespace", "__builtin__:policy"})
 BUILTIN_PREFIX = "__builtin__:"
+MAX_GATE_CAPTURE_BYTES = 2 * 1024 * 1024
 
 
 def changed_paths_for_scope(entries_by_scope: dict[str, list[dict[str, Any]]], scope: str) -> list[str]:
@@ -163,6 +167,52 @@ def run_builtin_gate(repo: Path, gate: dict[str, Any], snapshot: dict[str, Any],
     return None
 
 
+def read_captured_output(handle: Any, max_bytes: int = MAX_GATE_CAPTURE_BYTES) -> tuple[str, bool, int]:
+    handle.flush()
+    handle.seek(0, 2)
+    total_bytes = handle.tell()
+    handle.seek(0)
+    raw = handle.read(max_bytes + 1)
+    truncated = total_bytes > max_bytes
+    text = raw[:max_bytes].decode("utf-8", "replace")
+    return text, truncated, total_bytes
+
+
+def run_external_gate(repo: Path, argv: list[str], timeout_seconds: int) -> dict[str, Any]:
+    with SpooledTemporaryFile(max_size=MAX_GATE_CAPTURE_BYTES, mode="w+b") as stdout_file, \
+         SpooledTemporaryFile(max_size=MAX_GATE_CAPTURE_BYTES, mode="w+b") as stderr_file:
+        try:
+            # Adapter argv is executed without shell expansion.
+            completed = subprocess.run(  # nosec B603
+                argv,
+                cwd=str(repo),
+                shell=False,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                timeout=timeout_seconds,
+                check=False,
+            )
+            exit_code = completed.returncode
+        except OSError as exc:
+            exit_code = -2
+            stderr_file.write(f"Could not execute gate command: {exc}".encode("utf-8", "replace"))
+        except subprocess.TimeoutExpired:
+            exit_code = -1
+            stderr_file.write(f"\nGate timed out after {timeout_seconds} seconds".encode("utf-8"))
+
+        stdout, stdout_truncated, stdout_bytes = read_captured_output(stdout_file)
+        stderr, stderr_truncated, stderr_bytes = read_captured_output(stderr_file)
+        return {
+            "exit_code": exit_code,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": stdout_truncated,
+            "stderr_truncated": stderr_truncated,
+            "stdout_bytes": stdout_bytes,
+            "stderr_bytes": stderr_bytes,
+        }
+
+
 def parse_gate_output(gate: dict[str, Any], stdout: str, stderr: str, exit_code: int) -> list[dict[str, Any]]:
     parser = gate.get("parser", {"type": "exit-code"})
     parser_type = parser.get("type", "exit-code")
@@ -265,74 +315,231 @@ def resolve_record_update_path(snapshot: dict[str, Any], snapshot_path: Path) ->
     return path
 
 
-def run_planned_gates(repo: Path, config: dict[str, Any], snapshot: dict[str, Any], snapshot_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
-    gate_by_id = {gate["id"]: gate for gate in config.get("gates", [])}
-    slice_by_path = slice_by_path_map(snapshot)
-    results = []
-    diagnostics = []
-    exit_status = 0
-    for gate_id in snapshot.get("planned_gates", []):
-        if gate_id not in gate_by_id:
-            raise WorkflowError(f"planned gate is missing from current config: {gate_id}")
-        gate = gate_by_id[gate_id]
-        argv = expand_argv(gate["argv"], snapshot)
-        start = time.monotonic()
+def is_builtin_gate(gate: dict[str, Any], argv: list[str]) -> bool:
+    return bool(argv) and argv[0] in BUILTIN_GATE_COMMANDS
+
+
+def gate_trust_metadata(
+    gate: dict[str, Any],
+    argv: list[str],
+    *,
+    allow_untrusted_gates: bool,
+    ci_mode: bool,
+) -> dict[str, Any]:
+    builtin = is_builtin_gate(gate, argv)
+    trusted = True if builtin else bool(gate.get("trusted", False))
+    allow_in_ci = True if builtin else bool(gate.get("allow_in_ci", False))
+    metadata: dict[str, Any] = {
+        "trusted": trusted,
+        "allow_in_ci": allow_in_ci,
+        "writes_worktree": bool(gate.get("writes_worktree", False)),
+        "requires_network": bool(gate.get("requires_network", False)),
+        "trust_reason": gate.get("trust_reason") or ("builtin gate" if builtin else ""),
+    }
+    if not builtin and not trusted and not allow_untrusted_gates:
+        metadata["trust_warning"] = "external gate is untrusted; pass --allow-untrusted-gates to acknowledge local execution"
+    if not builtin and ci_mode and (not trusted or not allow_in_ci):
+        metadata["ci_refused"] = True
+    return metadata
+
+
+def run_configured_gate(
+    repo: Path,
+    gate: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    allow_untrusted_gates: bool,
+    ci_mode: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+    gate_id = gate["id"]
+    argv = expand_argv(gate["argv"], snapshot)
+    trust_metadata = gate_trust_metadata(
+        gate,
+        argv,
+        allow_untrusted_gates=allow_untrusted_gates,
+        ci_mode=ci_mode,
+    )
+    start = time.monotonic()
+    stdout = ""
+    stderr = ""
+    stdout_bytes = 0
+    stderr_bytes = 0
+    stdout_truncated = False
+    stderr_truncated = False
+    trust_refused = bool(trust_metadata.get("ci_refused"))
+    if trust_refused:
+        exit_code = -3
+        stderr = (
+            f"External gate {gate_id} refused in CI mode; set trusted=true and "
+            "allow_in_ci=true after reviewing the command"
+        )
+        stderr_bytes = len(stderr.encode("utf-8"))
+    else:
         builtin_result = run_builtin_gate(repo, gate, snapshot, argv)
         if builtin_result is None:
-            try:
-                completed = subprocess.run(
-                    argv,
-                    cwd=str(repo),
-                    shell=False,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=gate.get("timeout_seconds", 60),
-                )
-                exit_code = completed.returncode
-                stdout = completed.stdout.decode("utf-8", "replace")
-                stderr = completed.stderr.decode("utf-8", "replace")
-            except OSError as exc:
-                exit_code = -2
-                stdout = ""
-                stderr = f"Could not execute gate command: {exc}"
-            except subprocess.TimeoutExpired as exc:
-                exit_code = -1
-                stdout = (exc.stdout or b"").decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-                stderr = (exc.stderr or b"").decode("utf-8", "replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-                stderr += f"\nGate timed out after {gate.get('timeout_seconds', 60)} seconds"
+            external_result = run_external_gate(repo, argv, gate.get("timeout_seconds", 60))
+            exit_code = external_result["exit_code"]
+            stdout = external_result["stdout"]
+            stderr = external_result["stderr"]
+            stdout_truncated = external_result["stdout_truncated"]
+            stderr_truncated = external_result["stderr_truncated"]
+            stdout_bytes = external_result["stdout_bytes"]
+            stderr_bytes = external_result["stderr_bytes"]
         else:
             exit_code, stdout, stderr = builtin_result
-        duration_ms = int((time.monotonic() - start) * 1000)
+            stdout_bytes = len(stdout.encode("utf-8"))
+            stderr_bytes = len(stderr.encode("utf-8"))
+    duration_ms = int((time.monotonic() - start) * 1000)
 
+    if trust_refused:
+        raw_gate_diagnostics = [normalize_diagnostic(
+            tool=gate_id,
+            severity="error",
+            rule="untrusted-gate-refused",
+            message=stderr,
+            scope=gate["scope"],
+            blocking=bool(gate.get("blocking", True)),
+        )]
+    else:
         raw_gate_diagnostics = parse_gate_output(gate, stdout, stderr, exit_code)
-        gate_diagnostics, filtered_count = filter_diagnostics(gate, snapshot, raw_gate_diagnostics)
-        attach_diagnostic_slices(gate_diagnostics, slice_by_path)
-        fail_level = gate.get("fail_level", "error")
-        blocking = bool(gate.get("blocking", True))
-        diag_blocks = any(
-            bool(item.get("blocking", blocking)) and severity_at_least(item.get("severity", "none"), fail_level)
-            for item in gate_diagnostics
-        )
-        parser_type = gate.get("parser", {"type": "exit-code"}).get("type", "exit-code")
-        command_failed = exit_code != 0 and fail_level != "none" and (parser_type == "exit-code" or not raw_gate_diagnostics)
-        failed = blocking and (command_failed or diag_blocks)
-        status = "failed" if failed else "passed"
-        if failed:
-            exit_status = 1
-        result = redact_data({
-            "id": gate_id,
-            "argv": argv,
-            "blocking": blocking,
-            "exit_code": exit_code,
-            "duration_ms": duration_ms,
-            "status": status,
-            "diagnostics_count": len(gate_diagnostics),
-            "filtered_diagnostics_count": filtered_count,
-            "stdout_summary": truncate_text(redact_text(stdout)),
-            "stderr_summary": truncate_text(redact_text(stderr)),
-        })
-        results.append(result)
-        diagnostics.extend(redact_data(gate_diagnostics))
+    parser_type = gate.get("parser", {"type": "exit-code"}).get("type", "exit-code")
+    if parser_type != "exit-code" and (stdout_truncated or stderr_truncated):
+        raw_gate_diagnostics.append(normalize_diagnostic(
+            tool=gate_id,
+            severity="error",
+            rule="output-truncated",
+            message=(
+                f"Gate output exceeded the {MAX_GATE_CAPTURE_BYTES} byte capture limit; "
+                "diagnostics may be incomplete"
+            ),
+            scope=gate["scope"],
+            blocking=bool(gate.get("blocking", True)),
+        ))
+    gate_diagnostics, filtered_count = filter_diagnostics(gate, snapshot, raw_gate_diagnostics)
+    attach_diagnostic_slices(gate_diagnostics, slice_by_path_map(snapshot))
+    fail_level = gate.get("fail_level", "error")
+    blocking = bool(gate.get("blocking", True))
+    diag_blocks = any(
+        bool(item.get("blocking", blocking)) and severity_at_least(item.get("severity", "none"), fail_level)
+        for item in gate_diagnostics
+    )
+    command_failed = exit_code != 0 and fail_level != "none" and (parser_type == "exit-code" or not raw_gate_diagnostics)
+    failed = blocking and (command_failed or diag_blocks)
+    status = "failed" if failed else "passed"
+    result = redact_data({
+        "id": gate_id,
+        "argv": argv,
+        "blocking": blocking,
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "status": status,
+        "diagnostics_count": len(gate_diagnostics),
+        "filtered_diagnostics_count": filtered_count,
+        "stdout_bytes": stdout_bytes,
+        "stderr_bytes": stderr_bytes,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+        "stdout_summary": truncate_text(redact_text(stdout)),
+        "stderr_summary": truncate_text(redact_text(stderr)),
+        **trust_metadata,
+    })
+    return result, redact_data(gate_diagnostics), 1 if failed else 0
+
+
+def gate_dependencies(gate: dict[str, Any], planned_ids: set[str]) -> set[str]:
+    return {gate_id for gate_id in gate.get("depends_on", []) if gate_id in planned_ids}
+
+
+def next_ready_gate_group(
+    planned_gate_ids: list[str],
+    remaining: set[str],
+    completed: set[str],
+    gate_by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    ready = [
+        gate_id
+        for gate_id in planned_gate_ids
+        if gate_id in remaining and gate_dependencies(gate_by_id[gate_id], set(planned_gate_ids)) <= completed
+    ]
+    if not ready:
+        raise WorkflowError("planned gates have a dependency cycle or unmet dependency")
+    first = ready[0]
+    if not bool(gate_by_id[first].get("parallel_safe", False)):
+        return [first]
+    group = []
+    ready_set = set(ready)
+    start_index = planned_gate_ids.index(first)
+    for gate_id in planned_gate_ids[start_index:]:
+        if gate_id not in remaining:
+            continue
+        if gate_id not in ready_set or not bool(gate_by_id[gate_id].get("parallel_safe", False)):
+            break
+        group.append(gate_id)
+    return group or [first]
+
+
+def run_planned_gates(
+    repo: Path,
+    config: dict[str, Any],
+    snapshot: dict[str, Any],
+    snapshot_path: Path,
+    *,
+    allow_untrusted_gates: bool = False,
+    ci_mode: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+    gate_by_id = {gate["id"]: gate for gate in config.get("gates", [])}
+    planned_gate_ids = list(snapshot.get("planned_gates", []))
+    results_by_id: dict[str, dict[str, Any]] = {}
+    diagnostics_by_id: dict[str, list[dict[str, Any]]] = {}
+    exit_status = 0
+    remaining = set(planned_gate_ids)
+    completed: set[str] = set()
+
+    for gate_id in planned_gate_ids:
+        if gate_id not in gate_by_id:
+            raise WorkflowError(f"planned gate is missing from current config: {gate_id}")
+
+    while remaining:
+        group = next_ready_gate_group(planned_gate_ids, remaining, completed, gate_by_id)
+        if len(group) == 1:
+            gate_id = group[0]
+            result, gate_diagnostics, failed = run_configured_gate(
+                repo,
+                gate_by_id[gate_id],
+                snapshot,
+                allow_untrusted_gates=allow_untrusted_gates,
+                ci_mode=ci_mode,
+            )
+            results_by_id[gate_id] = result
+            diagnostics_by_id[gate_id] = gate_diagnostics
+            exit_status = max(exit_status, failed)
+        else:
+            with ThreadPoolExecutor(max_workers=len(group)) as executor:
+                future_by_id = {
+                    gate_id: executor.submit(
+                        run_configured_gate,
+                        repo,
+                        gate_by_id[gate_id],
+                        snapshot,
+                        allow_untrusted_gates=allow_untrusted_gates,
+                        ci_mode=ci_mode,
+                    )
+                    for gate_id in group
+                }
+                for gate_id in group:
+                    result, gate_diagnostics, failed = future_by_id[gate_id].result()
+                    results_by_id[gate_id] = result
+                    diagnostics_by_id[gate_id] = gate_diagnostics
+                    exit_status = max(exit_status, failed)
+        remaining.difference_update(group)
+        completed.update(group)
+
+    results = [results_by_id[gate_id] for gate_id in planned_gate_ids]
+    diagnostics = [
+        diagnostic
+        for gate_id in planned_gate_ids
+        for diagnostic in diagnostics_by_id.get(gate_id, [])
+    ]
 
     path = resolve_record_update_path(snapshot, snapshot_path)
     if path.exists():

@@ -7,7 +7,8 @@ Adapters connect the generic review-loop contract to a specific repository. Star
 An adapter should define:
 
 - local rule files in `rule_files`;
-- modes such as `normal_loop` and `large_merge`;
+- modes such as `normal_loop`, `large_merge`, or a repository-specific custom
+  mode;
 - slices and risk levels;
 - gate commands as `argv` arrays;
 - `when_paths` selectors for gates that should run only for specific changed
@@ -41,14 +42,23 @@ The config file is JSON. A gate includes:
 - `scope`: `staged`, `unstaged`, `untracked`, `merge_base_to_head`, or `all`;
 - `when_paths`: optional path globs; when present, the gate is planned only if
   changed paths in the gate scope match one of these globs;
-- `modes`: optional list that restricts a gate to `normal_loop` or
-  `large_merge`;
+- `modes`: optional list that restricts a gate to configured mode ids;
 - `filter_mode`: `nofilter`, `file`, `added`, or `diff_context`;
 - `fail_level`: minimum severity that fails the gate;
 - `blocking`: whether failures block the loop;
 - `timeout_seconds`: maximum local runtime for the gate;
 - `final_always`: whether a gate should run on a final-pass snapshot even when
   no matching path changed;
+- `trusted`: whether an external command has been reviewed;
+- `allow_in_ci`: whether a trusted external command may run under
+  `gate --ci-mode`;
+- `writes_worktree`: whether the gate may modify files;
+- `requires_network`: whether the gate needs network access;
+- `trust_reason`: short reason why the command is trusted;
+- `parallel_safe`: whether the gate may run concurrently with other ready
+  parallel gates;
+- `reads_worktree_only`: whether the gate only reads repository state;
+- `depends_on`: gate ids that must finish first when both gates are planned;
 - `parser`: `exit-code`, `git-diff-check`, `regex-lines`, `json-diagnostics`,
   `rdjson`, `sarif`, or `checkstyle`.
 
@@ -58,6 +68,12 @@ diff context. Diagnostics without a file are kept so tool-level parse and
 execution failures are not hidden.
 
 Use `{baseline}`, `{merge_base}`, and `{snapshot_id}` tokens in `argv` when a gate needs snapshot-derived values.
+
+Mode ids are validated against the config file rather than a hardcoded list.
+Use `normal_loop` and `large_merge` for common workflows, and add custom modes
+when a repository needs a narrower scope or advisory capabilities such as
+`requires_merge_base`, `requires_repo_map`, `max_changed_files`, or
+`max_diff_bytes_per_slice`.
 
 Built-in commands:
 

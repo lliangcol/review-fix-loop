@@ -22,6 +22,10 @@ review-fix-loop validate-config --repo . --config review-fix-loop.gates.json
 ```
 
 Use `review-fix-loop list-adapters --repo .` to see bundled and checkout-local adapters.
+If `.review-fix-loop.local.json` exists, `validate-config`, `doctor`, and
+`snapshot` report whether that local override was applied. Use
+`--no-local-override` in CI or release checks when local overrides must be
+ignored.
 
 ## Create Pass 1
 
@@ -60,6 +64,8 @@ review-fix-loop gate \
 ```
 
 The gate command executes only `planned_gates` from the snapshot. If the effective gate config or rule files changed after the snapshot was created, gate execution fails and asks for a fresh snapshot.
+Use `--ci-mode` in CI so newly added external gates cannot run unless the
+adapter marks them `trusted=true` and `allow_in_ci=true`.
 
 ## Fix, Then Create Pass 2
 
@@ -90,6 +96,10 @@ review-fix-loop doctor --repo . --config review-fix-loop.gates.json
 ```
 
 Add `--include-repo-map` to `snapshot` when a large Python change benefits from a compact symbol map in the snapshot.
+Add `--no-local-override` to `snapshot`, `gate`, `validate-config`, or `doctor`
+when the effective config must exclude `.review-fix-loop.local.json`.
+Use `--locale zh-CN` or `REVIEW_FIX_LOOP_LOCALE=zh-CN` to localize common
+human-facing errors. JSON keys remain unchanged.
 
 ## Common Errors
 

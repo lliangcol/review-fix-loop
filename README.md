@@ -112,6 +112,8 @@ Review Fix Loop is not a hosted PR bot, not a GitHub App, not a hook framework, 
 - [Adapters](docs/adapters.md)
 - [Comparisons](docs/comparisons.md)
 - [Contracts](docs/contracts.md)
+- [Deep research execution plan](docs/deep-research-execution-plan.md)
+- [Remaining work implementation plan](docs/remaining-work-implementation-plan.md)
 - [Review loop runbook](docs/review-loop-runbook.md)
 - [Template repository guide](docs/template-repository.md)
 - [FAQ](docs/faq.md)
@@ -122,8 +124,13 @@ Review Fix Loop is not a hosted PR bot, not a GitHub App, not a hook framework, 
 ```bash
 python -m pip install -e ".[dev]"
 python -m pytest -q
+python -m pytest -q --cov=review_fix_loop --cov-branch --cov-report=term-missing
+python -m ruff check src tests
+python -m mypy src/review_fix_loop
+python -m bandit -r src/review_fix_loop
+python -m pip_audit
 python -m build
 python -m twine check dist/*
 ```
 
-The runtime package has no install-time dependencies. Development extras are only for tests and release checks.
+The runtime package has no install-time dependencies. Development extras are only for tests, quality checks, security checks, and release checks.

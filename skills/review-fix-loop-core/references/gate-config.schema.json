@@ -26,7 +26,12 @@
           "require_risk_slices": { "type": "boolean" },
           "require_invariant_checks": { "type": "boolean" },
           "require_residual_risk_report": { "type": "boolean" },
+          "requires_merge_base": { "type": "boolean" },
+          "requires_final_pass": { "type": "boolean" },
+          "requires_repo_map": { "type": "boolean" },
+          "requires_residual_risk_report": { "type": "boolean" },
           "max_deep_review_files": { "type": "integer", "minimum": 1 },
+          "max_changed_files": { "type": "integer", "minimum": 1 },
           "max_diff_bytes_per_slice": { "type": "integer", "minimum": 1 }
         }
       }
@@ -68,13 +73,24 @@
           },
           "modes": {
             "type": "array",
-            "items": { "enum": ["normal_loop", "large_merge"] }
+            "items": { "type": "string" }
           },
           "filter_mode": { "enum": ["added", "diff_context", "file", "nofilter"] },
           "fail_level": { "enum": ["none", "info", "warning", "error"] },
           "blocking": { "type": "boolean" },
           "timeout_seconds": { "type": "integer", "minimum": 1 },
           "final_always": { "type": "boolean" },
+          "trusted": { "type": "boolean" },
+          "allow_in_ci": { "type": "boolean" },
+          "writes_worktree": { "type": "boolean" },
+          "requires_network": { "type": "boolean" },
+          "trust_reason": { "type": "string" },
+          "parallel_safe": { "type": "boolean" },
+          "reads_worktree_only": { "type": "boolean" },
+          "depends_on": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "policy": { "type": "object" },
           "parser": {
             "type": "object",

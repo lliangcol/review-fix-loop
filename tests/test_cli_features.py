@@ -251,3 +251,105 @@ def test_new_cli_commands_and_repo_map(capsys, tmp_path: Path) -> None:
     captured = capsys.readouterr()
     assert code == 0
     assert json.loads(captured.out)["repo_map_files"] == 1
+
+
+def test_local_override_provenance_and_disable_switch(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config_path = write_config(repo, [
+        {
+            "id": "base",
+            "argv": [sys.executable, "-c", "print('base')"],
+            "scope": "all",
+            "final_always": True,
+            "parser": {"type": "exit-code"},
+        }
+    ])
+    local_override = repo / ".review-fix-loop.local.json"
+    local_override.write_text(json.dumps({
+        "gates": [
+            {
+                "id": "local",
+                "argv": [sys.executable, "-c", "print('local')"],
+                "scope": "all",
+                "final_always": True,
+                "parser": {"type": "exit-code"},
+            }
+        ]
+    }), encoding="utf-8")
+
+    code = main(["validate-config", "--repo", str(repo), "--config", str(config_path)])
+    captured = capsys.readouterr()
+    default_summary = json.loads(captured.out)
+
+    assert code == 0
+    assert default_summary["gates"] == ["local"]
+    assert default_summary["local_override_applied"] is True
+    assert default_summary["local_override_available"] is True
+    assert default_summary["local_override_disabled"] is False
+    assert default_summary["local_override_path"] == str(local_override.resolve())
+    assert default_summary["config_sources"] == [str(config_path.resolve()), str(local_override.resolve())]
+
+    code = main([
+        "validate-config",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config_path),
+        "--no-local-override",
+    ])
+    captured = capsys.readouterr()
+    disabled_summary = json.loads(captured.out)
+
+    assert code == 0
+    assert disabled_summary["gates"] == ["base"]
+    assert disabled_summary["local_override_applied"] is False
+    assert disabled_summary["local_override_available"] is True
+    assert disabled_summary["local_override_disabled"] is True
+    assert disabled_summary["config_sources"] == [str(config_path.resolve())]
+
+    snap = snapshot(capsys, repo, config_path, tmp_path / "cache", "--final-pass")
+    assert snap["planned_gates"] == ["local"]
+    assert snap["local_override_applied"] is True
+
+    code = main([
+        "snapshot",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config_path),
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "1",
+        "--final-pass",
+        "--no-local-override",
+    ])
+    captured = capsys.readouterr()
+    disabled_snap = json.loads(captured.out)
+
+    assert code == 0
+    assert disabled_snap["planned_gates"] == ["base"]
+    assert disabled_snap["local_override_applied"] is False
+    assert disabled_snap["local_override_disabled"] is True
+
+
+def test_locale_env_localizes_common_workflow_error(capsys, monkeypatch, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [])
+    monkeypatch.setenv("REVIEW_FIX_LOOP_LOCALE", "zh-CN")
+
+    code = main([
+        "snapshot",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config),
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "2",
+    ])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "--pass 大于 1 时必须提供 --previous-run-record" in captured.err

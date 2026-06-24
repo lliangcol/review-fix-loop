@@ -46,6 +46,13 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "read-only git diff whitespace check",
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }
@@ -59,6 +66,13 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "read-only git diff whitespace check",
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }
@@ -72,6 +86,8 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 60,
+      "parallel_safe": true,
+      "reads_worktree_only": true,
       "parser": {
         "type": "git-diff-check"
       }
@@ -86,6 +102,11 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 300,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "project test command declared by adapter",
       "parser": {
         "type": "exit-code"
       }
@@ -100,6 +121,11 @@
       "fail_level": "error",
       "blocking": true,
       "timeout_seconds": 300,
+      "trusted": true,
+      "allow_in_ci": true,
+      "writes_worktree": false,
+      "requires_network": false,
+      "trust_reason": "project build command declared by adapter",
       "parser": {
         "type": "exit-code"
       }

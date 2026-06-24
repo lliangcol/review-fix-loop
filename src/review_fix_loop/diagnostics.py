@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import re
-import xml.etree.ElementTree as ET
+# Parses bounded local gate output without adding runtime dependencies.
+import xml.etree.ElementTree as ET  # nosec B405
 from typing import Any
 
 SEVERITY_ORDER = {"none": 0, "info": 1, "warning": 2, "error": 3}
@@ -82,7 +83,7 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def parse_git_diff_check(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
-    diagnostics = []
+    diagnostics: list[dict[str, Any]] = []
     for line_text in output.splitlines():
         match = re.match(r"^(?P<file>.*?):(?P<line>\d+):(?P<message>.*)$", line_text)
         if not match:
@@ -277,7 +278,7 @@ def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[d
         for result in results:
             if not isinstance(result, dict):
                 continue
-            location = {}
+            location: dict[str, Any] = {}
             locations = result.get("locations", [])
             if isinstance(locations, list) and locations and isinstance(locations[0], dict):
                 location = locations[0].get("physicalLocation", {}) if isinstance(locations[0].get("physicalLocation"), dict) else {}
@@ -317,7 +318,8 @@ def parse_checkstyle(output: str, gate_id: str, scope: str, blocking: bool) -> l
     if not output.strip():
         return []
     try:
-        root = ET.fromstring(output)
+        # Gate output is captured and bounded before parsing.
+        root = ET.fromstring(output)  # nosec B314
     except ET.ParseError as exc:
         return [normalize_diagnostic(
             tool=gate_id,

@@ -9,29 +9,34 @@ from typing import Any
 from .assets import discover_adapters, read_adapter_config
 from .config import load_effective_config
 from .errors import ConfigError, GitError, ReviewFixLoopError, WorkflowError
-from .gates import plan_gates, run_planned_gates
+from .gates import plan_gates
 from .git_snapshot import collect_scopes, compute_scope_hashes, resolve_repo, run_git
+from .i18n import fallback_locale, resolve_locale, translate_message
 from .repo_map import build_repo_map
 from .run_record import build_run_record, make_run_id, read_json, resolve_run_root, write_run_outputs
 from .schema_validation import validate_json_schema
-from .slices import attach_slices, compute_slice_hashes, paths_by_slice
+from .services.gate_service import execute_planned_gates
+from .services.snapshot_service import compute_freshness, verify_fresh_tree
+from .slices import attach_slices, compute_slice_hashes
 from .utils import sha256_json
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="review-fix-loop")
+    parser.add_argument("--locale", help="Human-message locale: en or zh-CN")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     snapshot = subparsers.add_parser("snapshot", help="Create a live Git review snapshot")
     snapshot.add_argument("--repo", required=True)
     snapshot.add_argument("--config", required=True)
-    snapshot.add_argument("--mode", required=True, choices=["normal_loop", "large_merge"])
+    snapshot.add_argument("--mode", required=True)
     snapshot.add_argument("--baseline")
     snapshot.add_argument("--pass", dest="pass_number", type=int, default=1)
     snapshot.add_argument("--previous-run-record")
     snapshot.add_argument("--final-pass", action="store_true")
     snapshot.add_argument("--write-run-record", action="store_true")
     snapshot.add_argument("--rule-file", action="append", default=[])
+    snapshot.add_argument("--no-local-override", action="store_true")
     snapshot.add_argument("--cache-dir")
     snapshot.add_argument("--include-repo-map", action="store_true")
     snapshot.add_argument("--repo-map-limit", type=int, default=40)
@@ -41,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--config", required=True)
     gate.add_argument("--snapshot", required=True)
     gate.add_argument("--rule-file", action="append", default=[])
+    gate.add_argument("--no-local-override", action="store_true")
+    gate.add_argument("--allow-untrusted-gates", action="store_true")
+    gate.add_argument("--ci-mode", action="store_true")
     gate.add_argument(
         "--require-fresh-tree",
         action="store_true",
@@ -61,6 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_config.add_argument("--repo", required=True)
     validate_config.add_argument("--config", required=True)
     validate_config.add_argument("--rule-file", action="append", default=[])
+    validate_config.add_argument("--no-local-override", action="store_true")
 
     validate_schema = subparsers.add_parser("validate-schema", help="Validate a JSON artifact against a bundled schema")
     validate_schema.add_argument("--schema", required=True, choices=["gate-config", "snapshot", "run-record", "diagnostic"])
@@ -71,6 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--repo", required=True)
     doctor.add_argument("--config")
     doctor.add_argument("--rule-file", action="append", default=[])
+    doctor.add_argument("--no-local-override", action="store_true")
 
     inspect = subparsers.add_parser("inspect", help="Summarize a snapshot or run record")
     inspect_input = inspect.add_mutually_exclusive_group(required=True)
@@ -90,7 +100,12 @@ def snapshot_command(args: argparse.Namespace) -> int:
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = repo / config_path
-    config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+    config, config_hash, rule_hashes, source_info = load_effective_config(
+        repo,
+        config_path,
+        args.rule_file,
+        apply_local_override=not args.no_local_override,
+    )
     mode_config = config["modes"].get(args.mode)
     if mode_config is None:
         raise ConfigError(f"mode is not defined in config: {args.mode}")
@@ -139,6 +154,7 @@ def snapshot_command(args: argparse.Namespace) -> int:
         "merge_base": merge_base,
         "config_hash": config_hash,
         "rule_hashes": rule_hashes,
+        **source_info,
         "final_pass": args.final_pass,
         "scope_hashes": scope_hashes,
         "slice_hashes": slice_hashes,
@@ -163,79 +179,17 @@ def snapshot_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def compute_freshness(
-    pass_number: int,
-    entries_by_scope: dict[str, list[dict[str, Any]]],
-    slice_hashes: dict[str, str],
-    config_hash: str,
-    rule_hashes: dict[str, str],
-    previous_run_record: str | None,
-) -> dict[str, Any]:
-    current_paths = paths_by_slice(entries_by_scope)
-    if pass_number == 1:
-        all_paths = sorted({path for paths in current_paths.values() for path in paths})
-        return {
-            "must_reload": all_paths,
-            "reloaded_slices": sorted(current_paths),
-            "reused_slices": [],
-            "reuse_forbidden_slices": {},
-        }
-
-    previous = read_json(Path(previous_run_record or ""))
-    previous_slice_hashes = previous.get("slice_hashes", {})
-    previous_rule_hashes = previous.get("rule_hashes", {})
-    previous_config_hash = previous.get("config_hash")
-    forbidden: dict[str, list[str]] = {}
-    reused = []
-    must_reload = []
-    for slice_id, current_hash in slice_hashes.items():
-        reasons = []
-        if previous_slice_hashes.get(slice_id) != current_hash:
-            reasons.append("slice hash changed")
-        if previous_config_hash != config_hash:
-            reasons.append("gate config changed")
-        if previous_rule_hashes != rule_hashes:
-            reasons.append("project rules changed")
-        if previous_slice_has_fixes(previous, slice_id):
-            reasons.append("previous pass fixed files in slice")
-        if previous_slice_has_unresolved_diagnostics(previous, slice_id):
-            reasons.append("previous pass had unresolved diagnostics in slice")
-        if reasons:
-            forbidden[slice_id] = reasons
-            must_reload.extend(current_paths.get(slice_id, []))
-        else:
-            reused.append(slice_id)
-    return {
-        "previous_snapshot_id": previous.get("snapshot_id"),
-        "must_reload": sorted(set(must_reload)),
-        "reloaded_slices": sorted(forbidden),
-        "reused_slices": sorted(reused),
-        "reuse_forbidden_slices": forbidden,
-    }
-
-
-def previous_slice_has_fixes(previous: dict[str, Any], slice_id: str) -> bool:
-    for fix in previous.get("fixes", []):
-        if isinstance(fix, dict) and fix.get("slice") == slice_id:
-            return True
-    return False
-
-
-def previous_slice_has_unresolved_diagnostics(previous: dict[str, Any], slice_id: str) -> bool:
-    if previous.get("stop_decision") == "stop":
-        return False
-    for diagnostic in previous.get("diagnostics", []):
-        if isinstance(diagnostic, dict) and diagnostic.get("slice") == slice_id:
-            return True
-    return False
-
-
 def gate_command(args: argparse.Namespace) -> int:
     repo = resolve_repo(args.repo)
     config_path = Path(args.config)
     if not config_path.is_absolute():
         config_path = repo / config_path
-    config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+    config, config_hash, rule_hashes, _source_info = load_effective_config(
+        repo,
+        config_path,
+        args.rule_file,
+        apply_local_override=not args.no_local_override,
+    )
     snapshot_path = Path(args.snapshot)
     snapshot = read_json(snapshot_path)
     if snapshot.get("config_hash") != config_hash:
@@ -244,21 +198,16 @@ def gate_command(args: argparse.Namespace) -> int:
         raise WorkflowError("rule file hashes differ from snapshot rule_hashes; create a fresh snapshot")
     if args.require_fresh_tree:
         verify_fresh_tree(repo, config, snapshot)
-    results, diagnostics, exit_status = run_planned_gates(repo, config, snapshot, snapshot_path)
+    results, diagnostics, exit_status = execute_planned_gates(
+        repo,
+        config,
+        snapshot,
+        snapshot_path,
+        allow_untrusted_gates=args.allow_untrusted_gates,
+        ci_mode=args.ci_mode,
+    )
     print(json.dumps({"gates": results, "diagnostics": diagnostics}, ensure_ascii=False, indent=2, sort_keys=True))
     return exit_status
-
-
-def verify_fresh_tree(repo: Path, config: dict[str, Any], snapshot: dict[str, Any]) -> None:
-    mode = snapshot.get("mode")
-    mode_config = config.get("modes", {}).get(mode)
-    if not isinstance(mode_config, dict):
-        raise WorkflowError(f"snapshot mode is not defined in config: {mode}")
-    baseline = snapshot.get("baseline") or mode_config.get("baseline")
-    _, entries_by_scope = collect_scopes(repo, mode, baseline, mode_config.get("scope", []))
-    attach_slices(entries_by_scope, config.get("slices", []))
-    if compute_scope_hashes(entries_by_scope) != snapshot.get("scope_hashes"):
-        raise WorkflowError("working tree changed since snapshot; create a fresh snapshot")
 
 
 def resolve_repo_file(repo: Path, value: str) -> Path:
@@ -292,12 +241,18 @@ def list_adapters_command(args: argparse.Namespace) -> int:
 def validate_config_command(args: argparse.Namespace) -> int:
     repo = resolve_repo(args.repo)
     config_path = resolve_repo_file(repo, args.config)
-    config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+    config, config_hash, rule_hashes, source_info = load_effective_config(
+        repo,
+        config_path,
+        args.rule_file,
+        apply_local_override=not args.no_local_override,
+    )
     summary = {
         "valid": True,
         "config": str(config_path),
         "config_hash": config_hash,
         "rule_hashes": rule_hashes,
+        **source_info,
         "modes": sorted(config.get("modes", {})),
         "slices": len(config.get("slices", [])),
         "gates": [gate["id"] for gate in config.get("gates", [])],
@@ -337,10 +292,16 @@ def doctor_command(args: argparse.Namespace) -> int:
     if repo is not None and args.config:
         try:
             config_path = resolve_repo_file(repo, args.config)
-            config, config_hash, rule_hashes = load_effective_config(repo, config_path, args.rule_file)
+            config, config_hash, rule_hashes, source_info = load_effective_config(
+                repo,
+                config_path,
+                args.rule_file,
+                apply_local_override=not args.no_local_override,
+            )
             status["config"] = str(config_path)
             status["config_hash"] = config_hash
             status["rule_hashes"] = rule_hashes
+            status.update(source_info)
             status["gates"] = len(config.get("gates", []))
         except ReviewFixLoopError as exc:
             status["ok"] = False
@@ -420,8 +381,10 @@ def inspect_command(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    locale = fallback_locale()
     try:
+        args = parser.parse_args(argv)
+        locale = resolve_locale(args.locale)
         if args.command == "snapshot":
             return snapshot_command(args)
         if args.command == "gate":
@@ -441,7 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("unknown command")
         return 2
     except (ReviewFixLoopError, ConfigError, GitError, WorkflowError, ValueError) as exc:
-        print(f"review-fix-loop: error: {exc}", file=sys.stderr)
+        print(f"review-fix-loop: error: {translate_message(str(exc), locale)}", file=sys.stderr)
         return 1
 
 

@@ -48,11 +48,16 @@ def test_snapshot_writes_run_record_without_source_or_diff_text(capsys, tmp_path
     assert code == 0, captured.err
     snapshot = json.loads(captured.out)
     record_text = Path(snapshot["run_record_path"]).read_text(encoding="utf-8")
+    run_root = Path(snapshot["run_record_path"]).parent
+    summary_path = run_root / "summary.md"
 
     assert "do-not-store" not in record_text
     assert "secret_token" not in record_text
     assert snapshot["run_record_path"].endswith("run-record.json")
     assert Path(snapshot["snapshot_path"]).exists()
+    assert summary_path.exists()
+    assert "Local override applied: False" in summary_path.read_text(encoding="utf-8")
+    assert not summary_path.with_name(summary_path.name + ".tmp").exists()
 
 
 def test_skill_snapshot_wrapper_runs_from_source_tree(tmp_path: Path) -> None:

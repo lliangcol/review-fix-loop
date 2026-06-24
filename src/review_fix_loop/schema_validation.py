@@ -45,7 +45,7 @@ def validate_json_schema(schema_name: str, path: Path, repo: Path | None = None)
     validator = "minimal"
     errors: list[str] = []
     try:
-        import jsonschema  # type: ignore[import-not-found]
+        import jsonschema  # type: ignore[import-not-found,import-untyped]
     except ImportError:
         errors = minimal_validate(data, schema, path)
     else:

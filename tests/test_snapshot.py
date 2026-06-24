@@ -287,5 +287,50 @@ def test_large_merge_marks_binary_branch_blob(capsys, tmp_path: Path) -> None:
     assert entry["binary"] is True
 
 
+def test_custom_mode_declared_by_config_is_accepted(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = {
+        "version": 1,
+        "rule_files": [],
+        "modes": {
+            "docs_review": {
+                "scope": ["unstaged"],
+                "max_changed_files": 10,
+                "requires_repo_map": False,
+            }
+        },
+        "slices": [{"id": "source", "paths": ["src/**"], "risk": "medium"}],
+        "gates": [],
+    }
+    config_path = repo / "gates.json"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    (repo / "src" / "app.py").write_text("print('custom')\n", encoding="utf-8")
+
+    code, snapshot = run_snapshot(
+        capsys,
+        repo,
+        config_path,
+        "--mode",
+        "docs_review",
+        "--pass",
+        "1",
+        "--write-run-record",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+
+    assert code == 0
+    assert snapshot["mode"] == "docs_review"
+    assert snapshot["must_reload"] == ["src/app.py"]
+
+    code = main(["validate-schema", "--schema", "snapshot", "--file", snapshot["snapshot_path"], "--repo", str(repo)])
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+
+    code = main(["validate-schema", "--schema", "run-record", "--file", snapshot["run_record_path"], "--repo", str(repo)])
+    captured = capsys.readouterr()
+    assert code == 0, captured.err
+
+
 def test_runtime_import_uses_no_external_dependency() -> None:
     assert "pytest" not in sys.modules.get("review_fix_loop", object()).__dict__

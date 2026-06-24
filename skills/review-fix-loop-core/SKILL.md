@@ -71,6 +71,11 @@ and previous diagnostics allow it. If the current snapshot marks a slice in
 Run only gates selected by the current snapshot `planned_gates`. If gate config
 changed, create a fresh snapshot before executing gates.
 
+Use `gate --ci-mode` for CI-style validation so untrusted external gates are
+refused unless the adapter marks both `trusted=true` and `allow_in_ci=true`.
+Parallel-safe gates may complete out of order, but run records preserve
+`planned_gates` order.
+
 ## Diagnostic reporting rules
 
 Report mechanical findings with severity, rule, file, line, message, scope,

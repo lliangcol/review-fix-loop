@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
+# Git is executed locally with shell=False and fixed argv shapes.
+import subprocess  # nosec B404
 from pathlib import Path
 from typing import Any
 
@@ -18,12 +19,20 @@ from .utils import (
 )
 
 SCOPES = ["merge_base_to_head", "staged", "unstaged", "untracked"]
+GIT_PATH_ARG_LIMIT_BYTES = 24000
 
 
 def run_git(repo: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[bytes]:
     command = ["git", "-C", str(repo), *args]
     try:
-        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=None, shell=False)
+        # Command is fixed git argv plus explicit arguments.
+        result = subprocess.run(  # nosec B603
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=None,
+            shell=False,
+        )
     except OSError as exc:
         raise GitError(f"could not execute git: {exc}") from exc
     if check and result.returncode != 0:
@@ -88,11 +97,7 @@ def parse_name_status_z(data: bytes, scope: str) -> list[dict[str, Any]]:
     return entries
 
 
-def staged_blob_ids(repo: Path, paths: list[str]) -> dict[str, str]:
-    if not paths:
-        return {}
-    result = run_git(repo, ["ls-files", "-s", "-z", "--", *paths])
-    output = result.stdout
+def parse_staged_blob_ids(output: bytes) -> dict[str, str]:
     blobs: dict[str, str] = {}
     for record in output.split(b"\0"):
         if not record:
@@ -102,6 +107,28 @@ def staged_blob_ids(repo: Path, paths: list[str]) -> dict[str, str]:
         parts = meta.split()
         if len(parts) >= 2:
             blobs[normalize_repo_path(path)] = parts[1]
+    return blobs
+
+
+def staged_blob_ids(repo: Path, paths: list[str]) -> dict[str, str]:
+    if not paths:
+        return {}
+    blobs: dict[str, str] = {}
+    for chunk in chunk_git_paths(paths):
+        try:
+            result = run_git(repo, ["ls-files", "-s", "-z", "--", *chunk], check=False)
+        except GitError:
+            result = None
+        if result is not None and result.returncode == 0:
+            blobs.update(parse_staged_blob_ids(result.stdout))
+            continue
+        for path in chunk:
+            try:
+                single = run_git(repo, ["ls-files", "-s", "-z", "--", path], check=False)
+            except GitError:
+                continue
+            if single.returncode == 0:
+                blobs.update(parse_staged_blob_ids(single.stdout))
     return blobs
 
 
@@ -115,12 +142,13 @@ def head_blob_id(repo: Path, path: str) -> str | None:
 def blob_is_binary(repo: Path, blob_id: str | None) -> bool:
     if not blob_id:
         return False
-    process = subprocess.Popen(
+    # Fixed git executable with shell expansion disabled.
+    process = subprocess.Popen(  # nosec B607
         ["git", "-C", str(repo), "cat-file", "-p", blob_id],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=None,
-        shell=False,
+        shell=False,  # nosec B603
     )
     try:
         sample = process.stdout.read(8192) if process.stdout else b""
@@ -199,6 +227,88 @@ def parse_diff_line_ranges(diff_output: bytes) -> tuple[list[list[int]], list[li
     return merge_line_ranges(added_lines), merge_ranges(context_ranges)
 
 
+def chunk_git_paths(paths: list[str], max_arg_bytes: int = GIT_PATH_ARG_LIMIT_BYTES) -> list[list[str]]:
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_bytes = 0
+    for path in paths:
+        path_bytes = len(path.encode("utf-8", "surrogateescape")) + 1
+        if current and current_bytes + path_bytes > max_arg_bytes:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(path)
+        current_bytes += path_bytes
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def parse_unified_diff_by_path(diff_output: bytes) -> dict[str, tuple[list[list[int]], list[list[int]]]]:
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    for line in diff_output.decode("utf-8", "replace").splitlines():
+        if line.startswith("diff --git "):
+            if current:
+                chunks.append(current)
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        chunks.append(current)
+
+    ranges_by_path: dict[str, tuple[list[list[int]], list[list[int]]]] = {}
+    for chunk in chunks:
+        path: str | None = None
+        for line in chunk:
+            if line.startswith("+++ "):
+                candidate = line[4:]
+                if candidate == "/dev/null":
+                    continue
+                if candidate.startswith("b/"):
+                    candidate = candidate[2:]
+                path = normalize_repo_path(candidate.strip('"'))
+                break
+        if path is None:
+            match = re.match(r"^diff --git a/(.*?) b/(.*?)$", chunk[0])
+            if match:
+                path = normalize_repo_path(match.group(2).strip('"'))
+        if path:
+            text = ("\n".join(chunk) + "\n").encode("utf-8", "replace")
+            ranges_by_path[path] = parse_diff_line_ranges(text)
+    return ranges_by_path
+
+
+def diff_line_ranges_for_scope(
+    repo: Path,
+    scope: str,
+    paths: list[str],
+    merge_base: str | None = None,
+) -> dict[str, tuple[list[list[int]], list[list[int]]]]:
+    if not paths:
+        return {}
+    if scope == "staged":
+        base_args = ["diff", "--cached", "--unified=3", "--no-ext-diff"]
+    elif scope == "unstaged":
+        base_args = ["diff", "--unified=3", "--no-ext-diff"]
+    elif scope == "merge_base_to_head":
+        if not merge_base:
+            return {}
+        base_args = ["diff", "--unified=3", "--no-ext-diff", f"{merge_base}..HEAD"]
+    else:
+        return {}
+    ranges_by_path: dict[str, tuple[list[list[int]], list[list[int]]]] = {}
+    for chunk in chunk_git_paths(paths):
+        try:
+            result = run_git(repo, [*base_args, "--", *chunk], check=False)
+        except GitError:
+            continue
+        if result.returncode != 0:
+            continue
+        ranges_by_path.update(parse_unified_diff_by_path(result.stdout))
+    return ranges_by_path
+
+
 def diff_line_ranges_for_path(repo: Path, scope: str, path: str, merge_base: str | None = None) -> tuple[list[list[int]], list[list[int]]]:
     if scope == "staged":
         args = ["diff", "--cached", "--unified=3", "--no-ext-diff", "--", path]
@@ -214,6 +324,63 @@ def diff_line_ranges_for_path(repo: Path, scope: str, path: str, merge_base: str
     if result.returncode != 0:
         return [], []
     return parse_diff_line_ranges(result.stdout)
+
+
+def batch_head_blob_ids(repo: Path, paths: list[str]) -> dict[str, str]:
+    if not paths:
+        return {}
+    blobs: dict[str, str] = {}
+    for chunk in chunk_git_paths(paths):
+        try:
+            result = run_git(repo, ["ls-tree", "-rz", "HEAD", "--", *chunk], check=False)
+        except GitError:
+            continue
+        if result.returncode != 0:
+            continue
+        for record in result.stdout.split(b"\0"):
+            if not record:
+                continue
+            text = decode_git_path(record)
+            if "\t" not in text:
+                continue
+            meta, path = text.split("\t", 1)
+            parts = meta.split()
+            if len(parts) >= 3 and parts[1] == "blob":
+                blobs[normalize_repo_path(path)] = parts[2]
+    return blobs
+
+
+def diff_binary_status_for_scope(
+    repo: Path,
+    scope: str,
+    paths: list[str],
+    merge_base: str | None = None,
+) -> dict[str, bool]:
+    if not paths:
+        return {}
+    if scope == "staged":
+        base_args = ["diff", "--cached", "--numstat", "-z"]
+    elif scope == "merge_base_to_head":
+        if not merge_base:
+            return {}
+        base_args = ["diff", "--numstat", "-z", f"{merge_base}..HEAD"]
+    else:
+        return {}
+    statuses: dict[str, bool] = {}
+    for chunk in chunk_git_paths(paths):
+        try:
+            result = run_git(repo, [*base_args, "--", *chunk], check=False)
+        except GitError:
+            continue
+        if result.returncode != 0:
+            continue
+        for record in result.stdout.split(b"\0"):
+            if not record:
+                continue
+            parts = decode_git_path(record).split("\t")
+            if len(parts) >= 3:
+                statuses[normalize_repo_path(parts[-1])] = parts[0] == "-" and parts[1] == "-"
+    return statuses
 
 
 def count_text_lines(path: Path) -> int:
@@ -269,6 +436,8 @@ def collect_staged(repo: Path) -> list[dict[str, Any]]:
     entries = parse_name_status_z(result.stdout, "staged")
     paths = [entry["path"] for entry in entries if not entry.get("deleted")]
     blobs = staged_blob_ids(repo, paths)
+    binary_status = diff_binary_status_for_scope(repo, "staged", paths)
+    line_ranges = diff_line_ranges_for_scope(repo, "staged", paths)
     for entry in entries:
         if entry.get("deleted"):
             entry["binary"] = False
@@ -279,18 +448,22 @@ def collect_staged(repo: Path) -> list[dict[str, Any]]:
         blob = blobs.get(entry["path"])
         entry["blob_id"] = blob
         entry["content_hash"] = f"gitblob:{blob}" if blob else None
-        entry["binary"] = blob_is_binary(repo, blob)
-        entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "staged", entry["path"])
+        entry["binary"] = binary_status[entry["path"]] if entry["path"] in binary_status else blob_is_binary(repo, blob)
+        ranges = line_ranges.get(entry["path"]) or diff_line_ranges_for_path(repo, "staged", entry["path"])
+        entry["changed_lines"], entry["diff_context_lines"] = ranges
     return entries
 
 
 def collect_unstaged(repo: Path) -> list[dict[str, Any]]:
     result = run_git(repo, ["diff", "--name-status", "-z"])
     entries = parse_name_status_z(result.stdout, "unstaged")
+    paths = [entry["path"] for entry in entries if not entry.get("deleted")]
+    line_ranges = diff_line_ranges_for_scope(repo, "unstaged", paths)
     for entry in entries:
         enrich_worktree_entry(repo, entry)
         if not entry.get("deleted"):
-            entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "unstaged", entry["path"])
+            ranges = line_ranges.get(entry["path"]) or diff_line_ranges_for_path(repo, "unstaged", entry["path"])
+            entry["changed_lines"], entry["diff_context_lines"] = ranges
     return entries
 
 
@@ -323,6 +496,10 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
         raise GitError(f"could not resolve merge base for baseline: {baseline}")
     result = run_git(repo, ["diff", "--name-status", "-z", f"{merge_base}..HEAD"])
     entries = parse_name_status_z(result.stdout, "merge_base_to_head")
+    paths = [entry["path"] for entry in entries if not entry.get("deleted")]
+    blobs = batch_head_blob_ids(repo, paths)
+    binary_status = diff_binary_status_for_scope(repo, "merge_base_to_head", paths, merge_base)
+    line_ranges = diff_line_ranges_for_scope(repo, "merge_base_to_head", paths, merge_base)
     for entry in entries:
         if entry.get("deleted"):
             entry["binary"] = False
@@ -330,16 +507,17 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
             entry["changed_lines"] = []
             entry["diff_context_lines"] = []
             continue
-        blob = head_blob_id(repo, entry["path"])
+        blob = blobs.get(entry["path"]) or head_blob_id(repo, entry["path"])
         entry["blob_id"] = blob
         entry["content_hash"] = f"gitblob:{blob}" if blob else None
-        entry["binary"] = blob_is_binary(repo, blob)
-        entry["changed_lines"], entry["diff_context_lines"] = diff_line_ranges_for_path(repo, "merge_base_to_head", entry["path"], merge_base)
+        entry["binary"] = binary_status[entry["path"]] if entry["path"] in binary_status else blob_is_binary(repo, blob)
+        ranges = line_ranges.get(entry["path"]) or diff_line_ranges_for_path(repo, "merge_base_to_head", entry["path"], merge_base)
+        entry["changed_lines"], entry["diff_context_lines"] = ranges
     return merge_base, entries
 
 
 def collect_scopes(repo: Path, mode: str, baseline: str | None, mode_scopes: list[str]) -> tuple[str | None, dict[str, list[dict[str, Any]]]]:
-    entries_by_scope = {scope: [] for scope in SCOPES}
+    entries_by_scope: dict[str, list[dict[str, Any]]] = {scope: [] for scope in SCOPES}
     merge_base = None
     if "merge_base_to_head" in mode_scopes:
         merge_base, entries_by_scope["merge_base_to_head"] = collect_merge_base_to_head(repo, baseline)

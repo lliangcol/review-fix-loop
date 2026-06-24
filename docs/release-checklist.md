@@ -14,10 +14,17 @@ Before publishing, confirm:
 ```powershell
 python -m pip install -e ".[dev]"
 python -m pytest -q
+python -m ruff check src tests
+python -m mypy src/review_fix_loop
+python -m bandit -r src/review_fix_loop
+python -m pip_audit
 if (Test-Path dist) { Remove-Item -Recurse -Force dist }
 if (Test-Path build) { Remove-Item -Recurse -Force build }
 python -m build
 python -m twine check dist/*
+review-fix-loop --help
+review-fix-loop list-adapters
+review-fix-loop validate-schema --schema gate-config --file adapters/generic/gates.json --repo .
 git diff --check
 git ls-files | Select-String -Pattern '(__pycache__|\.pytest_cache|\.egg-info|^dist/|^build/)'
 ```
@@ -31,12 +38,21 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+The `Release` workflow builds and checks the distributions, installs the built
+wheel for CLI smoke tests, then publishes through PyPI Trusted Publishing. The
+PyPI project must have a trusted publisher entry for this repository, workflow
+file, and release environment before the tag is pushed. Use the manual
+`workflow_dispatch` input `publish_to_testpypi=true` as a dry run before real
+PyPI publishing.
+
 Create a GitHub Release for `v0.1.0` with notes covering:
 
 - fresh snapshot contract;
 - slice invalidation;
 - planned gates;
 - redacted run records;
+- external gate trust boundary;
+- parallel-safe gates;
 - no hosted PR bot, GitHub App, model API key, or external service;
 - early adapter ecosystem.
 

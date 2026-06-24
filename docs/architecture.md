@@ -41,15 +41,38 @@ snapshot. `filter_mode` is applied after parsing diagnostics, so adapters can
 use reviewdog-style file, added-line, and diff-context filtering without
 discarding tool-level failures.
 
+External gates declare trust metadata in the adapter config. Built-in gates are
+trusted by definition. In normal local mode, untrusted external gates still run
+for compatibility and their result records the trust warning. In `gate
+--ci-mode`, external gates are refused unless the adapter marks both
+`trusted=true` and `allow_in_ci=true`.
+
+Gate execution is serial by default. A gate may opt into parallel execution with
+`parallel_safe=true`; `depends_on` keeps dependent gates ordered. Results are
+written in the snapshot's planned-gate order, not completion order.
+
 ## Advisory Mode Fields
+
+Mode ids are adapter-defined. The bundled templates still provide
+`normal_loop` and `large_merge`, but custom mode ids no longer require code
+changes as long as the mode object passes config validation.
 
 Modes may carry contract hints such as `require_fresh_snapshot`,
 `require_risk_slices`, `require_invariant_checks`,
-`require_residual_risk_report`, `max_deep_review_files`, and
-`max_diff_bytes_per_slice`. These are validated and folded into the config hash,
-but they are **advisory**: the reviewing agent and skill honor them, while the
-CLI itself does not mechanically enforce them. The CLI only enforces the
-fresh-snapshot, slice-invalidation, and gate contracts described above.
+`require_residual_risk_report`, `requires_merge_base`, `requires_final_pass`,
+`requires_repo_map`, `requires_residual_risk_report`, `max_deep_review_files`,
+`max_changed_files`, and `max_diff_bytes_per_slice`. These are validated and
+folded into the config hash, but most are **advisory**: the reviewing agent and
+skill honor them, while the CLI itself does not mechanically enforce them. The
+CLI only enforces the fresh-snapshot, slice-invalidation, and gate contracts
+described above.
+
+## Locale
+
+Machine-readable JSON keys, schema fields, and artifact paths stay in English.
+Human-facing errors can be localized with `--locale zh-CN` or
+`REVIEW_FIX_LOOP_LOCALE=zh-CN`. Unsupported locale values fail before command
+execution.
 
 ## Run Records And Redaction
 

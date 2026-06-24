@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from review_fix_loop.cli import main
@@ -270,6 +271,150 @@ def test_missing_gate_command_is_reported_as_gate_failure(capsys, tmp_path: Path
     assert "Could not execute gate command" in result["gates"][0]["stderr_summary"]
 
 
+def test_ci_mode_refuses_untrusted_external_gate(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [
+        {
+            "id": "untrusted",
+            "argv": [sys.executable, "-c", "print('should not run')"],
+            "scope": "all",
+            "final_always": True,
+            "parser": {"type": "exit-code"},
+        }
+    ])
+    snap = snapshot(capsys, repo, config, tmp_path / "cache")
+
+    code = main([
+        "gate",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config),
+        "--snapshot",
+        snap["snapshot_path"],
+        "--ci-mode",
+    ])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert code == 1
+    assert result["gates"][0]["status"] == "failed"
+    assert result["gates"][0]["trusted"] is False
+    assert result["diagnostics"][0]["rule"] == "untrusted-gate-refused"
+    assert "should not run" not in result["gates"][0]["stdout_summary"]
+
+
+def test_trusted_external_gate_runs_in_ci_and_persists_metadata(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [
+        {
+            "id": "trusted",
+            "argv": [sys.executable, "-c", "print('ok')"],
+            "scope": "all",
+            "final_always": True,
+            "trusted": True,
+            "allow_in_ci": True,
+            "writes_worktree": False,
+            "requires_network": False,
+            "trust_reason": "test fixture command",
+            "parser": {"type": "exit-code"},
+        }
+    ])
+    snap = snapshot(capsys, repo, config, tmp_path / "cache")
+
+    code = main([
+        "gate",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config),
+        "--snapshot",
+        snap["snapshot_path"],
+        "--ci-mode",
+    ])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    record = json.loads(Path(snap["run_record_path"]).read_text(encoding="utf-8"))
+
+    assert code == 0
+    assert result["gates"][0]["trusted"] is True
+    assert result["gates"][0]["allow_in_ci"] is True
+    assert result["gates"][0]["trust_reason"] == "test fixture command"
+    assert record["gates"][0]["trusted"] is True
+
+
+def test_parallel_safe_gates_keep_planned_order(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [
+        {
+            "id": "slow",
+            "argv": [sys.executable, "-c", "import time; time.sleep(0.35); print('slow')"],
+            "scope": "all",
+            "final_always": True,
+            "trusted": True,
+            "allow_in_ci": True,
+            "parallel_safe": True,
+            "parser": {"type": "exit-code"},
+        },
+        {
+            "id": "fast",
+            "argv": [sys.executable, "-c", "print('fast')"],
+            "scope": "all",
+            "final_always": True,
+            "trusted": True,
+            "allow_in_ci": True,
+            "parallel_safe": True,
+            "parser": {"type": "exit-code"},
+        },
+    ])
+    snap = snapshot(capsys, repo, config, tmp_path / "cache")
+
+    start = time.monotonic()
+    code = main(["gate", "--repo", str(repo), "--config", str(config), "--snapshot", snap["snapshot_path"]])
+    elapsed = time.monotonic() - start
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert code == 0
+    assert [gate["id"] for gate in result["gates"]] == ["slow", "fast"]
+    assert elapsed < 0.65
+
+
+def test_gate_depends_on_waits_for_dependency(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [
+        {
+            "id": "first",
+            "argv": [sys.executable, "-c", "print('first')"],
+            "scope": "all",
+            "final_always": True,
+            "trusted": True,
+            "allow_in_ci": True,
+            "parallel_safe": True,
+            "parser": {"type": "exit-code"},
+        },
+        {
+            "id": "second",
+            "argv": [sys.executable, "-c", "print('second')"],
+            "scope": "all",
+            "final_always": True,
+            "trusted": True,
+            "allow_in_ci": True,
+            "parallel_safe": True,
+            "depends_on": ["first"],
+            "parser": {"type": "exit-code"},
+        },
+    ])
+    snap = snapshot(capsys, repo, config, tmp_path / "cache")
+
+    code = main(["gate", "--repo", str(repo), "--config", str(config), "--snapshot", snap["snapshot_path"]])
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+
+    assert code == 0
+    assert [gate["id"] for gate in result["gates"]] == ["first", "second"]
+
+
 def test_generic_adapter_checks_untracked_whitespace_without_index_mutation(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     config = Path(__file__).resolve().parents[1] / "adapters" / "generic" / "gates.json"
@@ -330,7 +475,7 @@ def test_regex_parser_requires_pattern(capsys, tmp_path: Path) -> None:
 
 def test_generic_adapter_classifies_public_project_files() -> None:
     repo = Path(__file__).resolve().parents[1]
-    config, _, _ = load_effective_config(repo, repo / "adapters" / "generic" / "gates.json")
+    config, _, _, _ = load_effective_config(repo, repo / "adapters" / "generic" / "gates.json")
     slices = config["slices"]
 
     expected = {

@@ -17,6 +17,10 @@ review-fix-loop init --repo . --output review-fix-loop.gates.json
 review-fix-loop validate-config --repo . --config review-fix-loop.gates.json
 ```
 
+如果仓库存在 `.review-fix-loop.local.json`，`validate-config`、`doctor` 和
+`snapshot` 会报告该本地 override 是否生效。CI 或 release 检查需要忽略本地
+override 时，使用 `--no-local-override`。
+
 ## 生成 Pass 1 Snapshot
 
 ```bash
@@ -43,6 +47,8 @@ review-fix-loop gate \
 ```
 
 gate 只会执行 snapshot 中选择的 `planned_gates`。如果 gate 配置或规则文件在 snapshot 后发生变化，需要重新生成 snapshot。
+CI 中建议加 `--ci-mode`，这样新加入的 external gate 只有在 adapter 标记
+`trusted=true` 且 `allow_in_ci=true` 后才会执行。
 
 ## 修复后生成 Pass 2
 
@@ -69,3 +75,10 @@ review-fix-loop inspect --snapshot .review-fix-loop/runs/<run-id>/snapshot.json
 review-fix-loop validate-schema --schema snapshot --file .review-fix-loop/runs/<run-id>/snapshot.json
 review-fix-loop doctor --repo . --config review-fix-loop.gates.json
 ```
+
+当 effective config 必须排除 `.review-fix-loop.local.json` 时，可在
+`snapshot`、`gate`、`validate-config` 或 `doctor` 中加入
+`--no-local-override`。
+
+常见人类可读错误可通过 `--locale zh-CN` 或
+`REVIEW_FIX_LOOP_LOCALE=zh-CN` 本地化；JSON key 保持英文不变。

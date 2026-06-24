@@ -22,7 +22,7 @@
   ],
   "properties": {
     "schema": { "const": 1 },
-    "mode": { "enum": ["normal_loop", "large_merge"] },
+    "mode": { "type": "string" },
     "pass": { "type": "integer", "minimum": 1 },
     "snapshot_id": { "type": "string" },
     "previous_snapshot_id": { "type": ["string", "null"] },
@@ -30,6 +30,14 @@
     "merge_base": { "type": ["string", "null"] },
     "final_pass": { "type": "boolean" },
     "config_hash": { "type": "string" },
+    "config_sources": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "local_override_applied": { "type": "boolean" },
+    "local_override_available": { "type": "boolean" },
+    "local_override_disabled": { "type": "boolean" },
+    "local_override_path": { "type": ["string", "null"] },
     "rule_hashes": { "type": "object" },
     "scope_hashes": { "type": "object" },
     "slice_hashes": { "type": "object" },

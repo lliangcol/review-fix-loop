@@ -30,8 +30,8 @@ def python_symbols(path: Path) -> list[dict[str, Any]]:
 
 
 def build_repo_map(repo: Path, entries_by_scope: dict[str, list[dict[str, Any]]], max_files: int = 40) -> dict[str, Any]:
-    paths = [path for path in changed_snapshot_paths(entries_by_scope) if path.endswith(".py")]
-    files = []
+    paths: list[str] = [path for path in changed_snapshot_paths(entries_by_scope) if path.endswith(".py")]
+    files: list[dict[str, Any]] = []
     truncated = False
     for path in paths:
         if len(files) >= max_files:
