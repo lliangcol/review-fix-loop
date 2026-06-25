@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from .assets import read_schema
-from .config import load_effective_config
+from .config import load_effective_config, reject_duplicate_object_keys
 from .domain.types import JsonObject
 from .errors import WorkflowError
 
@@ -16,10 +16,12 @@ ValidationResult = JsonObject
 def load_json_object(path: Path) -> SchemaObject:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
+            data = json.load(handle, object_pairs_hook=reject_duplicate_object_keys)
     except FileNotFoundError as exc:
         raise WorkflowError(f"JSON file not found: {path}") from exc
     except json.JSONDecodeError as exc:
+        raise WorkflowError(f"malformed JSON in {path}: {exc}") from exc
+    except ValueError as exc:
         raise WorkflowError(f"malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise WorkflowError(f"expected JSON object in {path}")

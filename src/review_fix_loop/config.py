@@ -4,6 +4,7 @@ import copy
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 from .domain.types import JsonObject
 from .errors import ConfigError
@@ -42,13 +43,24 @@ ConfigData = JsonObject
 ConfigSourceInfo = JsonObject
 
 
+def reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> JsonObject:
+    result: JsonObject = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def load_json_file(path: Path) -> ConfigData:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            data = json.load(handle)
+            data = json.load(handle, object_pairs_hook=reject_duplicate_object_keys)
     except FileNotFoundError as exc:
         raise ConfigError(f"config file not found: {path}") from exc
     except json.JSONDecodeError as exc:
+        raise ConfigError(f"malformed JSON in {path}: {exc}") from exc
+    except ValueError as exc:
         raise ConfigError(f"malformed JSON in {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"config file must contain an object: {path}")

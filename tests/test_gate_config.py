@@ -845,3 +845,69 @@ def test_packaged_adapter_configs_validate(capsys) -> None:
         captured = capsys.readouterr()
         assert code == 0, f"{config_path.relative_to(root)} config failed: {captured.err}"
         assert json.loads(captured.out)["valid"] is True
+
+
+def test_validate_config_rejects_duplicate_json_keys(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config_path = repo / "duplicate.gates.json"
+    config_path.write_text(
+        """{
+  "version": 1,
+  "version": 1,
+  "modes": {
+    "normal_loop": { "scope": ["staged"] }
+  },
+  "slices": [
+    { "id": "source", "paths": ["src/**"] }
+  ],
+  "gates": []
+}
+""",
+        encoding="utf-8",
+    )
+
+    code = main([
+        "validate-config",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config_path),
+        "--no-local-override",
+    ])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "duplicate JSON key: version" in captured.err
+
+
+def test_validate_schema_rejects_duplicate_json_keys(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config_path = repo / "duplicate.gates.json"
+    config_path.write_text(
+        """{
+  "version": 1,
+  "modes": {
+    "normal_loop": { "scope": ["staged"], "scope": ["unstaged"] }
+  },
+  "slices": [
+    { "id": "source", "paths": ["src/**"] }
+  ],
+  "gates": []
+}
+""",
+        encoding="utf-8",
+    )
+
+    code = main([
+        "validate-schema",
+        "--schema",
+        "gate-config",
+        "--file",
+        str(config_path),
+        "--repo",
+        str(repo),
+    ])
+    captured = capsys.readouterr()
+
+    assert code == 1
+    assert "duplicate JSON key: scope" in captured.err
