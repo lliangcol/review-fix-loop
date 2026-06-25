@@ -97,8 +97,12 @@ The branch is locally complete when all of these pass:
 These items cannot be proven from a local checkout and must be completed in the
 GitHub/PyPI environment:
 
-- configure branch protection required checks after the split CI jobs exist;
-- confirm the `Security` workflow is green on GitHub Actions;
+- configure branch protection required checks after the split CI jobs exist
+  (public branch metadata currently reports `main.protected=false`);
 - configure PyPI/TestPyPI Trusted Publishing for this repository and workflow;
 - run the release workflow against TestPyPI or an equivalent dry run before the
   first production PyPI publish.
+
+Current remote evidence: the latest checked `Security` workflow run is green,
+while PyPI and TestPyPI project JSON lookups for `review-fix-loop` return 404,
+so release publishing remains unproven.

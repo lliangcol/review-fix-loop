@@ -38,6 +38,8 @@ act as a GitHub App, or run as an automatic repair platform.
 - `.github/workflows/security.yml`
 - `.github/workflows/release.yml`
 - GitHub Actions API for `lliangcol/review-fix-loop` workflow runs and jobs
+- GitHub Branch API for `lliangcol/review-fix-loop` branch metadata
+- PyPI and TestPyPI project JSON APIs for `review-fix-loop`
 - `CONTRIBUTING.md`
 - `docs/remaining-work-implementation-plan.md`
 - `docs/zh-CN/remaining-work-implementation-plan.md`
@@ -133,7 +135,13 @@ python -m pytest tests/test_gate_config.py -q
 - Local generated directories (`.review-fix-loop/`, `dist/`, caches, coverage
   output) are present in the checkout and must remain untracked.
 - GitHub branch protection and PyPI/TestPyPI trusted publisher setup cannot be
-  proven from the local checkout.
+  configured from the current local checkout because GitHub CLI is not
+  authenticated.
+- Public GitHub Branch API reports `main.protected=false`, so branch
+  protection is currently not enabled on `main`.
+- Public PyPI and TestPyPI project JSON lookups for `review-fix-loop` both
+  return 404, so no public package release is visible yet and trusted
+  publisher setup still needs owner-side verification before release.
 - Direct editable installs against the active uv-managed global Python still
   fail with PEP 668 `externally-managed-environment`; use
   `.\.venv\Scripts\python.exe` for local validation.
@@ -178,9 +186,13 @@ python -m pytest tests/test_gate_config.py -q
   runner label to `macos-15`.
 - GitHub Actions API check for commit `b3a20c1`: CI run `28144188537` passed
   and Security run `28144188557` passed after pinning the macOS runner label.
+- GitHub Actions API check for commit `5f0ae3c`: CI run `28144282384` passed
+  and Security run `28144282373` passed.
+- GitHub Branch API check for `main`: `protected=false`.
+- PyPI/TestPyPI project JSON checks for `review-fix-loop`: both returned 404.
 
 ## Next Candidate
 
-Verify branch protection and PyPI/TestPyPI trusted publisher configuration
-outside the local checkout, or continue with a small docs parity hardening pass
-if external settings access is not available.
+Enable branch protection required checks for `main` and configure PyPI/TestPyPI
+Trusted Publishing from authenticated owner-side settings, or continue with a
+small docs parity hardening pass if external settings access is not available.
