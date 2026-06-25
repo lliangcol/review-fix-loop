@@ -37,6 +37,7 @@ act as a GitHub App, or run as an automatic repair platform.
 - `.github/workflows/ci.yml`
 - `.github/workflows/security.yml`
 - `.github/workflows/release.yml`
+- GitHub Actions API for `lliangcol/review-fix-loop` workflow runs and jobs
 - `CONTRIBUTING.md`
 - `docs/remaining-work-implementation-plan.md`
 - `docs/zh-CN/remaining-work-implementation-plan.md`
@@ -78,6 +79,13 @@ act as a GitHub App, or run as an automatic repair platform.
   Chinese-to-English Markdown counterparts under `docs/`.
 - Local development documentation now uses the repository `.venv` path, which
   avoids PEP 668 failures from externally managed global Python installs.
+- Remote GitHub Actions for commit `1c47d51` now match the local `.venv`
+  validation surface: CI run `28143859766` passed and Security run
+  `28143859790` passed for push-triggered jobs. The Security
+  `dependency-review` job was skipped because it only runs on pull requests.
+- No Release workflow run was present for `1c47d51`; that is expected for a
+  normal branch push because Release only runs for `v*` tags or manual
+  `workflow_dispatch`.
 
 ## Validation Commands
 
@@ -121,19 +129,17 @@ python -m pytest tests/test_gate_config.py -q
 
 - Local generated directories (`.review-fix-loop/`, `dist/`, caches, coverage
   output) are present in the checkout and must remain untracked.
-- GitHub branch protection, workflow green status, and PyPI/TestPyPI trusted
-  publisher setup cannot be proven from the local checkout.
+- GitHub branch protection and PyPI/TestPyPI trusted publisher setup cannot be
+  proven from the local checkout.
 - Direct editable installs against the active uv-managed global Python still
   fail with PEP 668 `externally-managed-environment`; use
   `.\.venv\Scripts\python.exe` for local validation.
 
 ## Backlog
 
-1. Confirm GitHub Actions CI/security/release workflow status after the recent
-   local validation hardening reaches the remote.
-2. Configure or verify GitHub branch protection and PyPI/TestPyPI trusted
+1. Configure or verify GitHub branch protection and PyPI/TestPyPI trusted
    publisher setup outside the local checkout.
-3. Consider a stricter heading-structure parity check for paired English and
+2. Consider a stricter heading-structure parity check for paired English and
    Chinese docs if future docs drift appears.
 
 ## Recent Validation
@@ -154,8 +160,17 @@ python -m pytest tests/test_gate_config.py -q
 - Fresh `snapshot --pass 1 --write-run-record` and `gate --ci-mode --no-local-override`
   passed for the `.venv` bootstrap documentation round.
 - `git diff --check` and `git diff --cached --check`: passed.
+- GitHub Actions API check for commit `1c47d51`: CI run `28143859766` passed,
+  including lint, typecheck, artifact hygiene, build, and the full
+  ubuntu/windows/macos Python 3.10-3.14 test matrix.
+- GitHub Actions API check for commit `1c47d51`: Security run `28143859790`
+  passed for CodeQL and python-security; dependency-review was skipped on the
+  push event as configured.
+- GitHub Actions API check for Release workflow: no run was present for
+  `1c47d51`, matching the tag/manual trigger policy.
 
 ## Next Candidate
 
-Check the remote GitHub Actions results for the recent commits and reconcile
-any CI/security/release differences from the local `.venv` validation.
+Verify branch protection and PyPI/TestPyPI trusted publisher configuration
+outside the local checkout, or continue with a small docs parity hardening pass
+if external settings access is not available.
