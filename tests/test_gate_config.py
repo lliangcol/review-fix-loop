@@ -630,10 +630,21 @@ def test_trusted_external_gate_runs_in_ci_and_persists_metadata(capsys, tmp_path
 
 def test_parallel_safe_gates_keep_planned_order(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
+    slow_timing = tmp_path / "slow.json"
+    fast_timing = tmp_path / "fast.json"
+    timing_script = (
+        "import json, sys, time; "
+        "path, label = sys.argv[1], sys.argv[2]; "
+        "start = time.monotonic(); "
+        "time.sleep(0.35); "
+        "end = time.monotonic(); "
+        "open(path, 'w', encoding='utf-8').write(json.dumps({'start': start, 'end': end})); "
+        "print(label)"
+    )
     config = write_config(repo, [
         {
             "id": "slow",
-            "argv": [sys.executable, "-c", "import time; time.sleep(0.35); print('slow')"],
+            "argv": [sys.executable, "-c", timing_script, str(slow_timing), "slow"],
             "scope": "all",
             "final_always": True,
             "trusted": True,
@@ -643,7 +654,7 @@ def test_parallel_safe_gates_keep_planned_order(capsys, tmp_path: Path) -> None:
         },
         {
             "id": "fast",
-            "argv": [sys.executable, "-c", "print('fast')"],
+            "argv": [sys.executable, "-c", timing_script, str(fast_timing), "fast"],
             "scope": "all",
             "final_always": True,
             "trusted": True,
@@ -662,7 +673,11 @@ def test_parallel_safe_gates_keep_planned_order(capsys, tmp_path: Path) -> None:
 
     assert code == 0
     assert [gate["id"] for gate in result["gates"]] == ["slow", "fast"]
-    assert elapsed < 0.65
+    assert elapsed < 1.0
+
+    slow = json.loads(slow_timing.read_text(encoding="utf-8"))
+    fast = json.loads(fast_timing.read_text(encoding="utf-8"))
+    assert max(slow["start"], fast["start"]) < min(slow["end"], fast["end"])
 
 
 def test_gate_depends_on_waits_for_dependency(capsys, tmp_path: Path) -> None:
