@@ -9,9 +9,16 @@ python -m pip install -e ".[dev]"
 python -m pytest -q
 ```
 
-Before opening a pull request, also run:
+Before opening a pull request, run the same local checks that back the CI,
+security, and release workflows when your environment supports them:
 
 ```bash
+python -m pytest -q
+python -m pytest -q --cov=review_fix_loop --cov-branch --cov-report=term-missing
+python -m ruff check src tests
+python -m mypy src/review_fix_loop
+python -m bandit -r src/review_fix_loop
+python -m pip_audit
 python -m build
 python -m twine check dist/*
 git diff --check

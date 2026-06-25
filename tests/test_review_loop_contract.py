@@ -1,9 +1,47 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import yaml
+
+
+README_DOC_LINK_RE = re.compile(r"^- \[[^\]]+\]\(([^)]+)\)$")
+GENERATED_ARTIFACT_HYGIENE_PATTERNS = {
+    "__pycache__/": "__pycache__",
+    ".pytest_cache/": r"\.pytest_cache",
+    ".mypy_cache/": r"\.mypy_cache",
+    ".ruff_cache/": r"\.ruff_cache",
+    "*.egg-info/": r"\.egg-info",
+    "dist/": "^dist/",
+    "build/": "^build/",
+    ".review-fix-loop/": r"^\.review-fix-loop/",
+}
+
+
+def zh_counterpart_link(link: str) -> str:
+    if link.startswith("docs/"):
+        return link.replace("docs/", "docs/zh-CN/", 1)
+    if link == "README.zh-CN.md":
+        return "README.md"
+    return link
+
+
+def read_markdown_section_links(path: Path, heading: str) -> list[str]:
+    links: list[str] = []
+    in_section = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line == heading:
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section:
+            match = README_DOC_LINK_RE.match(line)
+            if match:
+                links.append(match.group(1))
+    return links
 
 
 def test_contract_fixtures_exist() -> None:
@@ -45,10 +83,13 @@ def test_skill_reference_schemas_match_packaged_schemas() -> None:
     root = Path(__file__).resolve().parents[1]
     src_schema_root = root / "src" / "review_fix_loop" / "schemas"
     skill_schema_root = root / "skills" / "review-fix-loop-core" / "references"
-    for src_path in src_schema_root.glob("*.schema.json"):
+    src_names = sorted(path.name for path in src_schema_root.glob("*.schema.json"))
+    skill_names = sorted(path.name for path in skill_schema_root.glob("*.schema.json"))
+    assert src_names == skill_names
+
+    for src_path in sorted(src_schema_root.glob("*.schema.json")):
         skill_path = skill_schema_root / src_path.name
-        assert skill_path.exists()
-        assert json.loads(src_path.read_text(encoding="utf-8")) == json.loads(skill_path.read_text(encoding="utf-8"))
+        assert src_path.read_bytes() == skill_path.read_bytes()
 
 
 def test_docs_have_zh_cn_counterparts() -> None:
@@ -61,11 +102,31 @@ def test_docs_have_zh_cn_counterparts() -> None:
         assert zh_doc.exists(), f"missing zh-CN counterpart for {english_doc.name}"
 
 
-def test_generated_artifact_paths_are_ignored_and_untracked() -> None:
+def test_root_readme_documentation_links_are_paired() -> None:
     root = Path(__file__).resolve().parents[1]
-    ignore_text = (root / ".gitignore").read_text(encoding="utf-8")
-    for pattern in ("dist/", "build/", "*.egg-info/", ".review-fix-loop/", ".pytest_cache/"):
-        assert pattern in ignore_text
+    english_links = read_markdown_section_links(root / "README.md", "## Documentation")
+    zh_links = read_markdown_section_links(root / "README.zh-CN.md", "## \u6587\u6863")
+
+    expected_zh_links = [zh_counterpart_link(link) for link in english_links]
+
+    assert zh_links == expected_zh_links
+    for link in english_links + zh_links:
+        assert (root / link).exists(), link
+
+
+def test_generated_artifact_paths_are_ignored_and_guarded_by_ci() -> None:
+    root = Path(__file__).resolve().parents[1]
+    ignored_patterns = set((root / ".gitignore").read_text(encoding="utf-8").splitlines())
+    workflow = yaml.safe_load((root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    hygiene_steps = workflow["jobs"]["artifact-hygiene"]["steps"]
+    hygiene_script = next(
+        step["run"] for step in hygiene_steps if step.get("name") == "Check generated artifacts are not tracked"
+    )
+
+    assert "git ls-files" in hygiene_script
+    for ignore_pattern, hygiene_pattern in GENERATED_ARTIFACT_HYGIENE_PATTERNS.items():
+        assert ignore_pattern in ignored_patterns
+        assert hygiene_pattern in hygiene_script
 
 
 def test_runtime_never_uses_shell_true() -> None:

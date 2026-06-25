@@ -4,21 +4,18 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
 
 from .assets import discover_adapters, read_adapter_config
 from .config import load_effective_config
+from .domain.types import JsonObject
 from .errors import ConfigError, GitError, ReviewFixLoopError, WorkflowError
-from .gates import plan_gates
-from .git_snapshot import collect_scopes, compute_scope_hashes, resolve_repo, run_git
+from .git_snapshot import resolve_repo, run_git
 from .i18n import fallback_locale, resolve_locale, translate_message
-from .repo_map import build_repo_map
-from .run_record import build_run_record, make_run_id, read_json, resolve_run_root, write_run_outputs
-from .schema_validation import validate_json_schema
-from .services.gate_service import execute_planned_gates
-from .services.snapshot_service import compute_freshness, verify_fresh_tree
-from .slices import attach_slices, compute_slice_hashes
-from .utils import sha256_json
+from .run_record import read_json
+from .services.gate_service import execute_gate_request
+from .services.schema_service import validate_schema_request
+from .services.snapshot_service import create_snapshot_request
+from .utils import resolve_repo_file
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -91,128 +88,38 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def snapshot_command(args: argparse.Namespace) -> int:
-    if args.pass_number < 1:
-        raise WorkflowError("--pass must be 1 or greater")
-    if args.pass_number > 1 and not args.previous_run_record:
-        raise WorkflowError("--pass > 1 requires --previous-run-record")
-
-    repo = resolve_repo(args.repo)
-    config_path = Path(args.config)
-    if not config_path.is_absolute():
-        config_path = repo / config_path
-    config, config_hash, rule_hashes, source_info = load_effective_config(
-        repo,
-        config_path,
-        args.rule_file,
-        apply_local_override=not args.no_local_override,
-    )
-    mode_config = config["modes"].get(args.mode)
-    if mode_config is None:
-        raise ConfigError(f"mode is not defined in config: {args.mode}")
-    baseline = args.baseline or mode_config.get("baseline")
-    mode_scopes = mode_config.get("scope", [])
-    # The baseline is only meaningful when the branch diff is actually collected.
-    # Key off the scope (not the mode name) so any mode that declares
-    # merge_base_to_head records its baseline in the snapshot id and gate args.
-    uses_merge_base = "merge_base_to_head" in mode_scopes
-    recorded_baseline = baseline if uses_merge_base else None
-    merge_base, entries_by_scope = collect_scopes(repo, args.mode, baseline, mode_scopes)
-    attach_slices(entries_by_scope, config.get("slices", []))
-    scope_hashes = compute_scope_hashes(entries_by_scope)
-    slice_hashes = compute_slice_hashes(entries_by_scope)
-    planned_gates = plan_gates(config, args.mode, entries_by_scope, args.final_pass)
-    repo_map = build_repo_map(repo, entries_by_scope, args.repo_map_limit) if args.include_repo_map else None
-
-    snapshot_seed = {
-        "mode": args.mode,
-        "baseline": recorded_baseline,
-        "merge_base": merge_base,
-        "scope_hashes": scope_hashes,
-        "slice_hashes": slice_hashes,
-        "config_hash": config_hash,
-        "rule_hashes": rule_hashes,
-        "final_pass": args.final_pass,
-        "planned_gates": planned_gates,
-        "repo_map_hash": sha256_json(repo_map) if repo_map is not None else None,
-    }
-    snapshot_id = sha256_json(snapshot_seed)
-    freshness = compute_freshness(
+    result = create_snapshot_request(
+        args.repo,
+        args.config,
+        args.mode,
         args.pass_number,
-        entries_by_scope,
-        slice_hashes,
-        config_hash,
-        rule_hashes,
-        args.previous_run_record,
+        args.rule_file,
+        baseline=args.baseline,
+        previous_run_record=args.previous_run_record,
+        final_pass=args.final_pass,
+        write_run_record=args.write_run_record,
+        apply_local_override=not args.no_local_override,
+        cache_dir=args.cache_dir,
+        include_repo_map=args.include_repo_map,
+        repo_map_limit=args.repo_map_limit,
     )
-    snapshot: dict[str, Any] = {
-        "schema": 1,
-        "mode": args.mode,
-        "pass": args.pass_number,
-        "snapshot_id": snapshot_id,
-        "previous_snapshot_id": freshness.get("previous_snapshot_id"),
-        "baseline": recorded_baseline,
-        "merge_base": merge_base,
-        "config_hash": config_hash,
-        "rule_hashes": rule_hashes,
-        **source_info,
-        "final_pass": args.final_pass,
-        "scope_hashes": scope_hashes,
-        "slice_hashes": slice_hashes,
-        "entries": entries_by_scope,
-        "planned_gates": planned_gates,
-        **freshness,
-    }
-    if repo_map is not None:
-        snapshot["repo_map"] = repo_map
-
-    if args.write_run_record:
-        run_id = make_run_id(snapshot_id)
-        run_root = resolve_run_root(repo, args.cache_dir, run_id)
-        snapshot["snapshot_path"] = str(run_root / "snapshot.json")
-        snapshot["run_record_path"] = str(run_root / "run-record.json")
-        run_record = build_run_record(snapshot, run_id)
-        run_record["snapshot_path"] = snapshot["snapshot_path"]
-        run_record["run_record_path"] = snapshot["run_record_path"]
-        write_run_outputs(run_root, snapshot, run_record, config)
-
-    print(json.dumps(snapshot, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(result.to_json_output(), ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 
 def gate_command(args: argparse.Namespace) -> int:
-    repo = resolve_repo(args.repo)
-    config_path = Path(args.config)
-    if not config_path.is_absolute():
-        config_path = repo / config_path
-    config, config_hash, rule_hashes, _source_info = load_effective_config(
-        repo,
-        config_path,
+    result = execute_gate_request(
+        args.repo,
+        args.config,
+        args.snapshot,
         args.rule_file,
         apply_local_override=not args.no_local_override,
-    )
-    snapshot_path = Path(args.snapshot)
-    snapshot = read_json(snapshot_path)
-    if snapshot.get("config_hash") != config_hash:
-        raise WorkflowError("effective config hash differs from snapshot config_hash; create a fresh snapshot")
-    if snapshot.get("rule_hashes", {}) != rule_hashes:
-        raise WorkflowError("rule file hashes differ from snapshot rule_hashes; create a fresh snapshot")
-    if args.require_fresh_tree:
-        verify_fresh_tree(repo, config, snapshot)
-    results, diagnostics, exit_status = execute_planned_gates(
-        repo,
-        config,
-        snapshot,
-        snapshot_path,
         allow_untrusted_gates=args.allow_untrusted_gates,
         ci_mode=args.ci_mode,
+        require_fresh_tree=args.require_fresh_tree,
     )
-    print(json.dumps({"gates": results, "diagnostics": diagnostics}, ensure_ascii=False, indent=2, sort_keys=True))
-    return exit_status
-
-
-def resolve_repo_file(repo: Path, value: str) -> Path:
-    path = Path(value)
-    return path if path.is_absolute() else repo / path
+    print(json.dumps(result.to_json_output(), ensure_ascii=False, indent=2, sort_keys=True))
+    return result.exit_status
 
 
 def init_command(args: argparse.Namespace) -> int:
@@ -262,19 +169,13 @@ def validate_config_command(args: argparse.Namespace) -> int:
 
 
 def validate_schema_command(args: argparse.Namespace) -> int:
-    repo = None
-    if args.repo:
-        repo = resolve_repo(args.repo)
-        path = resolve_repo_file(repo, args.file)
-    else:
-        path = Path(args.file).resolve()
-    result = validate_json_schema(args.schema, path, repo)
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0 if result["valid"] else 1
+    result = validate_schema_request(args.schema, args.file, args.repo)
+    print(json.dumps(result.to_json_output(), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if result.valid else 1
 
 
 def doctor_command(args: argparse.Namespace) -> int:
-    status: dict[str, Any] = {
+    status: JsonObject = {
         "ok": True,
         "errors": [],
         "warnings": [],
@@ -311,7 +212,7 @@ def doctor_command(args: argparse.Namespace) -> int:
     return 0 if status["ok"] else 1
 
 
-def inspect_summary(data: dict[str, Any], kind: str) -> dict[str, Any]:
+def inspect_summary(data: JsonObject, kind: str) -> JsonObject:
     if kind == "snapshot":
         entries = data.get("entries", {})
         return {
@@ -345,7 +246,7 @@ def inspect_summary(data: dict[str, Any], kind: str) -> dict[str, Any]:
     }
 
 
-def format_markdown_summary(summary: dict[str, Any]) -> str:
+def format_markdown_summary(summary: JsonObject) -> str:
     lines = [
         f"# review-fix-loop {summary['kind']}",
         "",

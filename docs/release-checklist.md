@@ -26,7 +26,7 @@ review-fix-loop --help
 review-fix-loop list-adapters
 review-fix-loop validate-schema --schema gate-config --file adapters/generic/gates.json --repo .
 git diff --check
-git ls-files | Select-String -Pattern '(__pycache__|\.pytest_cache|\.egg-info|^dist/|^build/)'
+git ls-files | Select-String -Pattern '(__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.egg-info|^dist/|^build/|^\.review-fix-loop/)'
 ```
 
 The final command should produce no output.

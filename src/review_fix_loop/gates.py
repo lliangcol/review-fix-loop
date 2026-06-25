@@ -6,7 +6,7 @@ import subprocess  # nosec B404
 import time
 from pathlib import Path
 from tempfile import SpooledTemporaryFile
-from typing import Any
+from typing import IO
 
 from .diagnostics import (
     normalize_diagnostic,
@@ -18,8 +18,9 @@ from .diagnostics import (
     parse_sarif,
     severity_at_least,
 )
+from .domain.types import GateCommandOutput, GateRunResult, JsonObject
 from .errors import ConfigError, WorkflowError
-from .run_record import read_json, write_json
+from .run_record import update_run_record_after_gates
 from .utils import matches_any, normalize_repo_path, redact_data, redact_text, truncate_text
 
 # Canonical set of in-process gate commands. config.validate_config rejects any
@@ -29,8 +30,14 @@ BUILTIN_GATE_COMMANDS = frozenset({"__builtin__:untracked-whitespace", "__builti
 BUILTIN_PREFIX = "__builtin__:"
 MAX_GATE_CAPTURE_BYTES = 2 * 1024 * 1024
 
+GateConfig = JsonObject
+SnapshotData = JsonObject
+Entry = JsonObject
+Diagnostic = JsonObject
+EntriesByScope = dict[str, list[Entry]]
 
-def changed_paths_for_scope(entries_by_scope: dict[str, list[dict[str, Any]]], scope: str) -> list[str]:
+
+def changed_paths_for_scope(entries_by_scope: EntriesByScope, scope: str) -> list[str]:
     if scope == "all":
         entries = [entry for scope_entries in entries_by_scope.values() for entry in scope_entries]
     else:
@@ -43,13 +50,13 @@ def changed_paths_for_scope(entries_by_scope: dict[str, list[dict[str, Any]]], s
     return result
 
 
-def entries_for_scope(entries_by_scope: dict[str, list[dict[str, Any]]], scope: str) -> list[dict[str, Any]]:
+def entries_for_scope(entries_by_scope: EntriesByScope, scope: str) -> list[Entry]:
     if scope == "all":
         return [entry for scope_entries in entries_by_scope.values() for entry in scope_entries]
     return list(entries_by_scope.get(scope, []))
 
 
-def plan_gates(config: dict[str, Any], mode: str, entries_by_scope: dict[str, list[dict[str, Any]]], final_pass: bool) -> list[str]:
+def plan_gates(config: JsonObject, mode: str, entries_by_scope: EntriesByScope, final_pass: bool) -> list[str]:
     planned: list[str] = []
     for gate in config.get("gates", []):
         gate_id = gate["id"]
@@ -68,7 +75,7 @@ def plan_gates(config: dict[str, Any], mode: str, entries_by_scope: dict[str, li
     return planned
 
 
-def expand_argv(argv: list[str], snapshot: dict[str, Any]) -> list[str]:
+def expand_argv(argv: list[str], snapshot: SnapshotData) -> list[str]:
     # Avoid str.format so gate commands can contain JSON or Python literal braces.
     replacements = {
         "{baseline}": snapshot.get("baseline") or "",
@@ -93,7 +100,7 @@ def safe_snapshot_path(repo: Path, path: str) -> Path:
     return candidate
 
 
-def run_untracked_whitespace_builtin(repo: Path, snapshot: dict[str, Any]) -> tuple[int, str, str]:
+def run_untracked_whitespace_builtin(repo: Path, snapshot: SnapshotData) -> tuple[int, str, str]:
     diagnostics = []
     for entry in snapshot.get("entries", {}).get("untracked", []):
         if entry.get("deleted") or entry.get("binary") or entry.get("symlink"):
@@ -112,7 +119,7 @@ def run_untracked_whitespace_builtin(repo: Path, snapshot: dict[str, Any]) -> tu
     return (1 if diagnostics else 0, "\n".join(diagnostics), "")
 
 
-def run_policy_builtin(gate: dict[str, Any], snapshot: dict[str, Any]) -> tuple[int, str, str]:
+def run_policy_builtin(gate: GateConfig, snapshot: SnapshotData) -> tuple[int, str, str]:
     policy = gate.get("policy", {})
     if not isinstance(policy, dict):
         return -2, "", "__builtin__:policy requires a policy object"
@@ -154,7 +161,7 @@ def run_policy_builtin(gate: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
     return (1 if diagnostics else 0, json.dumps(output, ensure_ascii=False), "")
 
 
-def run_builtin_gate(repo: Path, gate: dict[str, Any], snapshot: dict[str, Any], argv: list[str]) -> tuple[int, str, str] | None:
+def run_builtin_gate(repo: Path, gate: GateConfig, snapshot: SnapshotData, argv: list[str]) -> tuple[int, str, str] | None:
     if not argv:
         return None
     command = argv[0]
@@ -167,7 +174,7 @@ def run_builtin_gate(repo: Path, gate: dict[str, Any], snapshot: dict[str, Any],
     return None
 
 
-def read_captured_output(handle: Any, max_bytes: int = MAX_GATE_CAPTURE_BYTES) -> tuple[str, bool, int]:
+def read_captured_output(handle: IO[bytes], max_bytes: int = MAX_GATE_CAPTURE_BYTES) -> tuple[str, bool, int]:
     handle.flush()
     handle.seek(0, 2)
     total_bytes = handle.tell()
@@ -178,7 +185,7 @@ def read_captured_output(handle: Any, max_bytes: int = MAX_GATE_CAPTURE_BYTES) -
     return text, truncated, total_bytes
 
 
-def run_external_gate(repo: Path, argv: list[str], timeout_seconds: int) -> dict[str, Any]:
+def run_external_gate(repo: Path, argv: list[str], timeout_seconds: int) -> GateCommandOutput:
     with SpooledTemporaryFile(max_size=MAX_GATE_CAPTURE_BYTES, mode="w+b") as stdout_file, \
          SpooledTemporaryFile(max_size=MAX_GATE_CAPTURE_BYTES, mode="w+b") as stderr_file:
         try:
@@ -202,18 +209,18 @@ def run_external_gate(repo: Path, argv: list[str], timeout_seconds: int) -> dict
 
         stdout, stdout_truncated, stdout_bytes = read_captured_output(stdout_file)
         stderr, stderr_truncated, stderr_bytes = read_captured_output(stderr_file)
-        return {
-            "exit_code": exit_code,
-            "stdout": stdout,
-            "stderr": stderr,
-            "stdout_truncated": stdout_truncated,
-            "stderr_truncated": stderr_truncated,
-            "stdout_bytes": stdout_bytes,
-            "stderr_bytes": stderr_bytes,
-        }
+        return GateCommandOutput(
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            stdout_truncated=stdout_truncated,
+            stderr_truncated=stderr_truncated,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+        )
 
 
-def parse_gate_output(gate: dict[str, Any], stdout: str, stderr: str, exit_code: int) -> list[dict[str, Any]]:
+def parse_gate_output(gate: GateConfig, stdout: str, stderr: str, exit_code: int) -> list[Diagnostic]:
     parser = gate.get("parser", {"type": "exit-code"})
     parser_type = parser.get("type", "exit-code")
     scope = gate["scope"]
@@ -252,12 +259,12 @@ def line_in_ranges(line: int | None, ranges: list[list[int]]) -> bool:
     return any(start <= line <= end for start, end in ranges)
 
 
-def path_matches_entry(path: str, entry: dict[str, Any]) -> bool:
+def path_matches_entry(path: str, entry: Entry) -> bool:
     normalized = normalize_repo_path(path)
     return normalized == normalize_repo_path(entry.get("path", ""))
 
 
-def diagnostic_matches_filter(diagnostic: dict[str, Any], entries: list[dict[str, Any]], filter_mode: str) -> bool:
+def diagnostic_matches_filter(diagnostic: Diagnostic, entries: list[Entry], filter_mode: str) -> bool:
     file_name = diagnostic.get("file")
     if filter_mode == "nofilter" or not file_name:
         return True
@@ -273,7 +280,7 @@ def diagnostic_matches_filter(diagnostic: dict[str, Any], entries: list[dict[str
     return any(line_in_ranges(line, entry.get(key, [])) for entry in matching_entries)
 
 
-def filter_diagnostics(gate: dict[str, Any], snapshot: dict[str, Any], diagnostics: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def filter_diagnostics(gate: GateConfig, snapshot: SnapshotData, diagnostics: list[Diagnostic]) -> tuple[list[Diagnostic], int]:
     filter_mode = gate.get("filter_mode", "nofilter")
     if filter_mode == "nofilter":
         return diagnostics, 0
@@ -282,7 +289,7 @@ def filter_diagnostics(gate: dict[str, Any], snapshot: dict[str, Any], diagnosti
     return kept, len(diagnostics) - len(kept)
 
 
-def slice_by_path_map(snapshot: dict[str, Any]) -> dict[str, str]:
+def slice_by_path_map(snapshot: SnapshotData) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for scope_entries in snapshot.get("entries", {}).values():
         if not isinstance(scope_entries, list):
@@ -295,41 +302,28 @@ def slice_by_path_map(snapshot: dict[str, Any]) -> dict[str, str]:
     return mapping
 
 
-def attach_diagnostic_slices(diagnostics: list[dict[str, Any]], slice_by_path: dict[str, str]) -> None:
+def attach_diagnostic_slices(diagnostics: list[Diagnostic], slice_by_path: dict[str, str]) -> None:
     for diagnostic in diagnostics:
         file_name = diagnostic.get("file")
         if diagnostic.get("slice") is None and isinstance(file_name, str) and file_name:
             diagnostic["slice"] = slice_by_path.get(normalize_repo_path(file_name))
 
 
-def resolve_record_update_path(snapshot: dict[str, Any], snapshot_path: Path) -> Path:
-    run_record_path = snapshot.get("run_record_path")
-    if not run_record_path:
-        return snapshot_path.parent / "run-record.json"
-    path = Path(run_record_path).resolve()
-    snapshot_dir = snapshot_path.resolve().parent
-    try:
-        path.parent.relative_to(snapshot_dir)
-    except ValueError as exc:
-        raise WorkflowError("run_record_path must stay under the snapshot directory") from exc
-    return path
-
-
-def is_builtin_gate(gate: dict[str, Any], argv: list[str]) -> bool:
+def is_builtin_gate(gate: GateConfig, argv: list[str]) -> bool:
     return bool(argv) and argv[0] in BUILTIN_GATE_COMMANDS
 
 
 def gate_trust_metadata(
-    gate: dict[str, Any],
+    gate: GateConfig,
     argv: list[str],
     *,
     allow_untrusted_gates: bool,
     ci_mode: bool,
-) -> dict[str, Any]:
+) -> JsonObject:
     builtin = is_builtin_gate(gate, argv)
     trusted = True if builtin else bool(gate.get("trusted", False))
     allow_in_ci = True if builtin else bool(gate.get("allow_in_ci", False))
-    metadata: dict[str, Any] = {
+    metadata: JsonObject = {
         "trusted": trusted,
         "allow_in_ci": allow_in_ci,
         "writes_worktree": bool(gate.get("writes_worktree", False)),
@@ -345,12 +339,12 @@ def gate_trust_metadata(
 
 def run_configured_gate(
     repo: Path,
-    gate: dict[str, Any],
-    snapshot: dict[str, Any],
+    gate: GateConfig,
+    snapshot: SnapshotData,
     *,
     allow_untrusted_gates: bool,
     ci_mode: bool,
-) -> tuple[dict[str, Any], list[dict[str, Any]], int]:
+) -> GateRunResult:
     gate_id = gate["id"]
     argv = expand_argv(gate["argv"], snapshot)
     trust_metadata = gate_trust_metadata(
@@ -378,13 +372,13 @@ def run_configured_gate(
         builtin_result = run_builtin_gate(repo, gate, snapshot, argv)
         if builtin_result is None:
             external_result = run_external_gate(repo, argv, gate.get("timeout_seconds", 60))
-            exit_code = external_result["exit_code"]
-            stdout = external_result["stdout"]
-            stderr = external_result["stderr"]
-            stdout_truncated = external_result["stdout_truncated"]
-            stderr_truncated = external_result["stderr_truncated"]
-            stdout_bytes = external_result["stdout_bytes"]
-            stderr_bytes = external_result["stderr_bytes"]
+            exit_code = external_result.exit_code
+            stdout = external_result.stdout
+            stderr = external_result.stderr
+            stdout_truncated = external_result.stdout_truncated
+            stderr_truncated = external_result.stderr_truncated
+            stdout_bytes = external_result.stdout_bytes
+            stderr_bytes = external_result.stderr_bytes
         else:
             exit_code, stdout, stderr = builtin_result
             stdout_bytes = len(stdout.encode("utf-8"))
@@ -426,7 +420,7 @@ def run_configured_gate(
     command_failed = exit_code != 0 and fail_level != "none" and (parser_type == "exit-code" or not raw_gate_diagnostics)
     failed = blocking and (command_failed or diag_blocks)
     status = "failed" if failed else "passed"
-    result = redact_data({
+    result: JsonObject = redact_data({
         "id": gate_id,
         "argv": argv,
         "blocking": blocking,
@@ -443,10 +437,11 @@ def run_configured_gate(
         "stderr_summary": truncate_text(redact_text(stderr)),
         **trust_metadata,
     })
-    return result, redact_data(gate_diagnostics), 1 if failed else 0
+    diagnostics: list[JsonObject] = redact_data(gate_diagnostics)
+    return GateRunResult(gate=result, diagnostics=diagnostics, failed=1 if failed else 0)
 
 
-def gate_dependencies(gate: dict[str, Any], planned_ids: set[str]) -> set[str]:
+def gate_dependencies(gate: GateConfig, planned_ids: set[str]) -> set[str]:
     return {gate_id for gate_id in gate.get("depends_on", []) if gate_id in planned_ids}
 
 
@@ -454,7 +449,7 @@ def next_ready_gate_group(
     planned_gate_ids: list[str],
     remaining: set[str],
     completed: set[str],
-    gate_by_id: dict[str, dict[str, Any]],
+    gate_by_id: dict[str, GateConfig],
 ) -> list[str]:
     ready = [
         gate_id
@@ -480,17 +475,17 @@ def next_ready_gate_group(
 
 def run_planned_gates(
     repo: Path,
-    config: dict[str, Any],
-    snapshot: dict[str, Any],
+    config: JsonObject,
+    snapshot: SnapshotData,
     snapshot_path: Path,
     *,
     allow_untrusted_gates: bool = False,
     ci_mode: bool = False,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+) -> tuple[list[JsonObject], list[JsonObject], int]:
     gate_by_id = {gate["id"]: gate for gate in config.get("gates", [])}
     planned_gate_ids = list(snapshot.get("planned_gates", []))
-    results_by_id: dict[str, dict[str, Any]] = {}
-    diagnostics_by_id: dict[str, list[dict[str, Any]]] = {}
+    results_by_id: dict[str, JsonObject] = {}
+    diagnostics_by_id: dict[str, list[JsonObject]] = {}
     exit_status = 0
     remaining = set(planned_gate_ids)
     completed: set[str] = set()
@@ -503,16 +498,16 @@ def run_planned_gates(
         group = next_ready_gate_group(planned_gate_ids, remaining, completed, gate_by_id)
         if len(group) == 1:
             gate_id = group[0]
-            result, gate_diagnostics, failed = run_configured_gate(
+            gate_run = run_configured_gate(
                 repo,
                 gate_by_id[gate_id],
                 snapshot,
                 allow_untrusted_gates=allow_untrusted_gates,
                 ci_mode=ci_mode,
             )
-            results_by_id[gate_id] = result
-            diagnostics_by_id[gate_id] = gate_diagnostics
-            exit_status = max(exit_status, failed)
+            results_by_id[gate_id] = gate_run.gate
+            diagnostics_by_id[gate_id] = gate_run.diagnostics
+            exit_status = max(exit_status, gate_run.failed)
         else:
             with ThreadPoolExecutor(max_workers=len(group)) as executor:
                 future_by_id = {
@@ -527,10 +522,10 @@ def run_planned_gates(
                     for gate_id in group
                 }
                 for gate_id in group:
-                    result, gate_diagnostics, failed = future_by_id[gate_id].result()
-                    results_by_id[gate_id] = result
-                    diagnostics_by_id[gate_id] = gate_diagnostics
-                    exit_status = max(exit_status, failed)
+                    gate_run = future_by_id[gate_id].result()
+                    results_by_id[gate_id] = gate_run.gate
+                    diagnostics_by_id[gate_id] = gate_run.diagnostics
+                    exit_status = max(exit_status, gate_run.failed)
         remaining.difference_update(group)
         completed.update(group)
 
@@ -541,11 +536,5 @@ def run_planned_gates(
         for diagnostic in diagnostics_by_id.get(gate_id, [])
     ]
 
-    path = resolve_record_update_path(snapshot, snapshot_path)
-    if path.exists():
-        record = read_json(path)
-        record["gates"] = results
-        record["diagnostics"] = diagnostics
-        record["stop_decision"] = "continue" if exit_status else "stop"
-        write_json(path, record)
+    update_run_record_after_gates(snapshot, snapshot_path, results, diagnostics, exit_status)
     return results, diagnostics, exit_status

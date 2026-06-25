@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 from .assets import read_schema
 from .config import load_effective_config
+from .domain.types import JsonObject
 from .errors import WorkflowError
 
+SchemaObject = JsonObject
+ValidationResult = JsonObject
 
-def load_json_object(path: Path) -> dict[str, Any]:
+
+def load_json_object(path: Path) -> SchemaObject:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -22,14 +26,25 @@ def load_json_object(path: Path) -> dict[str, Any]:
     return data
 
 
-def minimal_validate(data: dict[str, Any], schema: dict[str, Any], path: Path) -> list[str]:
+def string_items(value: object) -> list[str]:
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def object_properties(value: object) -> list[tuple[str, SchemaObject]]:
+    if not isinstance(value, Mapping):
+        return []
+    return [(key, item) for key, item in value.items() if isinstance(key, str) and isinstance(item, dict)]
+
+
+def minimal_validate(data: SchemaObject, schema: SchemaObject, path: Path) -> list[str]:
     errors = []
-    for field in schema.get("required", []):
+    for field in string_items(schema.get("required", [])):
         if field not in data:
             errors.append(f"{path}: missing required field: {field}")
-    properties = schema.get("properties", {})
-    for field, rules in properties.items():
-        if field not in data or not isinstance(rules, dict):
+    for field, rules in object_properties(schema.get("properties", {})):
+        if field not in data:
             continue
         if "const" in rules and data[field] != rules["const"]:
             errors.append(f"{path}: field {field} must be {rules['const']!r}")
@@ -38,10 +53,12 @@ def minimal_validate(data: dict[str, Any], schema: dict[str, Any], path: Path) -
     return errors
 
 
-def validate_json_schema(schema_name: str, path: Path, repo: Path | None = None) -> dict[str, Any]:
+def validate_json_schema(schema_name: str, path: Path, repo: Path | None = None) -> ValidationResult:
     data = load_json_object(path)
     schema_text, schema_source = read_schema(schema_name)
     schema = json.loads(schema_text)
+    if not isinstance(schema, dict):
+        raise WorkflowError(f"bundled schema is not a JSON object: {schema_source}")
     validator = "minimal"
     errors: list[str] = []
     try:

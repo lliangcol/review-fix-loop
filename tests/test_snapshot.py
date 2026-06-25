@@ -5,7 +5,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from review_fix_loop.cli import main
+from review_fix_loop.domain.types import SnapshotRequest
+from review_fix_loop.errors import WorkflowError
+from review_fix_loop.services.snapshot_service import (
+    create_snapshot_from_request,
+    create_snapshot_request,
+    previous_slice_has_fixes,
+    previous_slice_has_unresolved_diagnostics,
+)
 from review_fix_loop.utils import DEFAULT_FILE_HASH_LIMIT_BYTES
 
 
@@ -100,6 +110,104 @@ def test_pass_2_after_fix_invalidates_changed_slice(capsys, tmp_path: Path) -> N
     assert "slice hash changed" in second["reuse_forbidden_slices"]["source"]
 
 
+def test_pass_2_reuses_unchanged_slice_when_another_slice_changed(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo)
+    git(repo, "add", "gates.json")
+    git(repo, "commit", "-m", "config")
+    (repo / "src" / "app.py").write_text("print('pass1')\n", encoding="utf-8")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_app.py").write_text("def test_app():\n    pass\n", encoding="utf-8")
+    code, first = run_snapshot(
+        capsys,
+        repo,
+        config,
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "1",
+        "--write-run-record",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+    assert code == 0
+    assert first["reloaded_slices"] == ["source", "tests"]
+
+    (repo / "src" / "app.py").write_text("print('pass2')\n", encoding="utf-8")
+    code, second = run_snapshot(
+        capsys,
+        repo,
+        config,
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "2",
+        "--previous-run-record",
+        first["run_record_path"],
+        "--write-run-record",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+
+    assert code == 0
+    assert second["previous_snapshot_id"] == first["snapshot_id"]
+    assert second["must_reload"] == ["src/app.py"]
+    assert second["reloaded_slices"] == ["source"]
+    assert second["reused_slices"] == ["tests"]
+    assert "source" in second["reuse_forbidden_slices"]
+    assert "tests" not in second["reuse_forbidden_slices"]
+
+
+def test_pass_2_previous_fix_metadata_invalidates_unchanged_slice(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo)
+    git(repo, "add", "gates.json")
+    git(repo, "commit", "-m", "config")
+    (repo / "src" / "app.py").write_text("print('needs review')\n", encoding="utf-8")
+    code, first = run_snapshot(
+        capsys,
+        repo,
+        config,
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "1",
+        "--write-run-record",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+    assert code == 0
+
+    previous_record_path = Path(first["run_record_path"])
+    previous_record = json.loads(previous_record_path.read_text(encoding="utf-8"))
+    previous_record["fixes"] = [{"path": "src/app.py", "slice": "source"}]
+    previous_record_path.write_text(json.dumps(previous_record), encoding="utf-8")
+
+    code, second = run_snapshot(
+        capsys,
+        repo,
+        config,
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "2",
+        "--previous-run-record",
+        str(previous_record_path),
+        "--write-run-record",
+        "--cache-dir",
+        str(tmp_path / "cache"),
+    )
+
+    assert code == 0
+    assert second["previous_snapshot_id"] == first["snapshot_id"]
+    assert second["slice_hashes"] == first["slice_hashes"]
+    assert second["must_reload"] == ["src/app.py"]
+    assert second["reloaded_slices"] == ["source"]
+    assert second["reused_slices"] == []
+    reasons = second["reuse_forbidden_slices"]["source"]
+    assert reasons == ["previous pass fixed files in slice"]
+
+
 def test_pass_2_without_previous_run_record_exits_nonzero(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     config = write_config(repo)
@@ -120,6 +228,58 @@ def test_pass_2_without_previous_run_record_exits_nonzero(capsys, tmp_path: Path
 
     assert code == 1
     assert "--previous-run-record" in captured.err
+
+
+def test_snapshot_service_requires_previous_run_record_for_pass_after_first(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo)
+    (repo / "src" / "app.py").write_text("print('dirty')\n", encoding="utf-8")
+
+    with pytest.raises(WorkflowError, match="--previous-run-record"):
+        create_snapshot_request(repo, config, "normal_loop", 2, [])
+
+
+def test_snapshot_service_accepts_typed_request_boundary(tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo)
+    (repo / "src" / "app.py").write_text("print('typed request')\n", encoding="utf-8")
+
+    result = create_snapshot_from_request(SnapshotRequest(
+        repo=repo,
+        config=config,
+        mode="normal_loop",
+        pass_number=1,
+        write_run_record=True,
+        cache_dir=str(tmp_path / "cache"),
+        include_repo_map=True,
+        repo_map_limit=5,
+    ))
+    snapshot = result.to_json_output()
+
+    assert snapshot["mode"] == "normal_loop"
+    assert snapshot["pass"] == 1
+    assert snapshot["must_reload"] == ["gates.json", "src/app.py"]
+    assert "repo_map" in snapshot
+    assert Path(snapshot["run_record_path"]).exists()
+
+
+def test_snapshot_service_previous_record_helpers_use_json_boundaries() -> None:
+    previous = {
+        "fixes": [{"slice": "source"}, {"path": "tests/test_app.py"}],
+        "diagnostics": [
+            {"slice": "source"},
+            {"slice": "tests"},
+        ],
+        "stop_decision": "needs_fixes",
+    }
+
+    assert previous_slice_has_fixes(previous, "source") is True
+    assert previous_slice_has_fixes(previous, "tests") is False
+    assert previous_slice_has_unresolved_diagnostics(previous, "tests") is True
+    assert previous_slice_has_unresolved_diagnostics(previous, "docs") is False
+
+    stopped_previous = {**previous, "stop_decision": "stop"}
+    assert previous_slice_has_unresolved_diagnostics(stopped_previous, "source") is False
 
 
 def test_pass_2_missing_previous_run_record_exits_nonzero_without_traceback(capsys, tmp_path: Path) -> None:

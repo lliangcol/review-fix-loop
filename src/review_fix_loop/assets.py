@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from importlib import resources
 from pathlib import Path
-from typing import Any
 
 from .errors import WorkflowError
 
@@ -26,8 +25,8 @@ def packaged_text(relative_path: str) -> str:
     return resources.files(PACKAGE).joinpath(relative_path).read_text(encoding="utf-8")
 
 
-def discover_adapters(repo: Path | None = None) -> list[dict[str, Any]]:
-    adapters: dict[str, dict[str, Any]] = {}
+def discover_adapters(repo: Path | None = None) -> list[dict[str, str]]:
+    adapters: dict[str, dict[str, str]] = {}
     for name, resource_path in PACKAGED_ADAPTERS.items():
         adapters[name] = {
             "name": name,
@@ -66,10 +65,10 @@ def read_adapter_config(adapter: str, repo: Path | None = None) -> tuple[str, st
     for item in discover_adapters(repo):
         if item["name"] != adapter:
             continue
-        path = item["path"]
+        adapter_path = item["path"]
         if item["source"] == "package":
-            return packaged_text(path), path
-        return Path(path).read_text(encoding="utf-8"), path
+            return packaged_text(adapter_path), adapter_path
+        return Path(adapter_path).read_text(encoding="utf-8"), adapter_path
     raise WorkflowError(f"unknown adapter: {adapter}")
 
 

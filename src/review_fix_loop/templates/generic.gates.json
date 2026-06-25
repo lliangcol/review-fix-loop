@@ -13,7 +13,6 @@
       "requires_residual_risk_report": true,
       "require_risk_slices": true,
       "require_invariant_checks": true,
-      "require_residual_risk_report": true,
       "max_changed_files": 80,
       "max_deep_review_files": 80,
       "max_diff_bytes_per_slice": 250000

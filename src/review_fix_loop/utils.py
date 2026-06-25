@@ -7,7 +7,9 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable, overload
+
+from .domain.types import JsonObject
 
 
 DEFAULT_STREAM_LIMIT_BYTES = 8192
@@ -25,7 +27,12 @@ def normalize_repo_path(path: str | os.PathLike[str]) -> str:
     return value.strip("/")
 
 
-def stable_json(data: Any) -> str:
+def resolve_repo_file(repo: Path, value: str | os.PathLike[str]) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else repo / path
+
+
+def stable_json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -33,7 +40,7 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
 
 
-def sha256_json(data: Any) -> str:
+def sha256_json(data: object) -> str:
     return sha256_text(stable_json(data))
 
 
@@ -126,7 +133,23 @@ def redact_text(text: str) -> str:
     return redacted
 
 
-def redact_data(value: Any) -> Any:
+@overload
+def redact_data(value: str) -> str: ...
+
+
+@overload
+def redact_data(value: JsonObject) -> JsonObject: ...
+
+
+@overload
+def redact_data(value: list[JsonObject]) -> list[JsonObject]: ...
+
+
+@overload
+def redact_data(value: object) -> object: ...
+
+
+def redact_data(value: object) -> object:
     if isinstance(value, str):
         return redact_text(value)
     if isinstance(value, Mapping):

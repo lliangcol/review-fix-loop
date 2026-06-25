@@ -12,11 +12,11 @@ import pytest
 from review_fix_loop.cli import main
 from review_fix_loop.errors import GitError
 from review_fix_loop import git_snapshot
-from review_fix_loop.git_snapshot import chunk_git_paths, collect_merge_base_to_head, collect_scopes
+from review_fix_loop.git_snapshot import chunk_git_paths, collect_merge_base_to_head, collect_scopes, parse_name_status_z
 from review_fix_loop.gates import MAX_GATE_CAPTURE_BYTES, run_untracked_whitespace_builtin
-from review_fix_loop.repo_map import build_repo_map
+from review_fix_loop.repo_map import build_repo_map, changed_snapshot_paths, python_symbols
 from review_fix_loop.run_record import write_json
-from review_fix_loop.utils import truncate_text
+from review_fix_loop.utils import redact_data, sha256_json, truncate_text
 
 
 def git(repo: Path, *args: str) -> None:
@@ -173,6 +173,65 @@ def test_write_json_failure_keeps_previous_file_intact(tmp_path: Path) -> None:
     assert not target.with_name(target.name + ".tmp").exists()
 
 
+def test_parse_name_status_z_uses_snapshot_entry_boundary() -> None:
+    entries = parse_name_status_z(
+        b"R100\0src/old.py\0src/new.py\0A\0src/added.py\0D\0src/deleted.py\0",
+        "staged",
+    )
+
+    assert entries == [
+        {
+            "scope": "staged",
+            "status": "R100",
+            "status_kind": "R",
+            "old_path": "src/old.py",
+            "path": "src/new.py",
+            "deleted": False,
+        },
+        {
+            "scope": "staged",
+            "status": "A",
+            "status_kind": "A",
+            "path": "src/added.py",
+            "deleted": False,
+        },
+        {
+            "scope": "staged",
+            "status": "D",
+            "status_kind": "D",
+            "path": "src/deleted.py",
+            "deleted": True,
+        },
+    ]
+
+
+def test_json_helpers_hash_stably_and_redact_nested_values() -> None:
+    first = {"b": [2, {"message": "token=secret-value"}], "a": True}
+    second = {"a": True, "b": [2, {"message": "token=secret-value"}]}
+
+    redacted = redact_data(first)
+
+    assert sha256_json(first) == sha256_json(second)
+    assert redacted == {"b": [2, {"message": "token=[REDACTED]"}], "a": True}
+    assert first["b"][1]["message"] == "token=secret-value"
+
+
+def test_repo_map_changed_paths_accepts_snapshot_entry_boundary() -> None:
+    paths = changed_snapshot_paths({
+        "staged": [
+            {"path": "src/app.py"},
+            {"path": "src/app.py"},
+            {"path": "src/deleted.py", "deleted": True},
+        ],
+        "unstaged": [
+            {"path": ""},
+            {"path": "src/other.py", "deleted": False},
+        ],
+    })
+
+    assert paths == ["src/app.py", "src/other.py"]
+
+
 def test_unresolved_diagnostics_forbid_slice_reuse(capsys, tmp_path: Path) -> None:
     repo = init_repo(tmp_path)
     (repo / "src" / "app.py").write_text("print('dirty')\n", encoding="utf-8")
@@ -217,6 +276,44 @@ def test_unresolved_diagnostics_forbid_slice_reuse(capsys, tmp_path: Path) -> No
     assert code == 0
     assert "source" not in second["reused_slices"]
     assert "previous pass had unresolved diagnostics in slice" in second["reuse_forbidden_slices"]["source"]
+
+
+def test_stopped_run_diagnostics_do_not_forbid_slice_reuse(capsys, tmp_path: Path) -> None:
+    repo = init_repo(tmp_path)
+    config = write_config(repo, [])
+    git(repo, "add", "gates.json")
+    git(repo, "commit", "-m", "config")
+    (repo / "src" / "app.py").write_text("print('dirty')\n", encoding="utf-8")
+    snap = run_snapshot(capsys, repo, config, tmp_path / "cache")
+
+    previous_record_path = Path(snap["run_record_path"])
+    previous_record = json.loads(previous_record_path.read_text(encoding="utf-8"))
+    previous_record["diagnostics"] = [{"file": "src/app.py", "slice": "source", "message": "already reviewed"}]
+    previous_record["stop_decision"] = "stop"
+    previous_record_path.write_text(json.dumps(previous_record), encoding="utf-8")
+
+    code = main([
+        "snapshot",
+        "--repo",
+        str(repo),
+        "--config",
+        str(config),
+        "--mode",
+        "normal_loop",
+        "--pass",
+        "2",
+        "--previous-run-record",
+        str(previous_record_path),
+    ])
+    captured = capsys.readouterr()
+    second = json.loads(captured.out)
+
+    assert code == 0
+    assert second["slice_hashes"] == snap["slice_hashes"]
+    assert second["must_reload"] == []
+    assert second["reloaded_slices"] == []
+    assert second["reused_slices"] == ["source"]
+    assert second["reuse_forbidden_slices"] == {}
 
 
 def test_snapshot_with_mode_missing_from_config_reports_config_error(capsys, tmp_path: Path) -> None:
@@ -315,6 +412,25 @@ def test_repo_map_truncated_only_counts_python_files(tmp_path: Path) -> None:
 
     assert [item["path"] for item in result["files"]] == ["a.py"]
     assert result["truncated"] is False
+
+
+def test_python_symbols_returns_stable_public_shape(tmp_path: Path) -> None:
+    source = tmp_path / "module.py"
+    source.write_text(
+        "class Service:\n"
+        "    def method(self):\n"
+        "        pass\n"
+        "\n"
+        "async def load():\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+
+    assert python_symbols(source) == [
+        {"kind": "class", "name": "Service", "line": 1},
+        {"kind": "function", "name": "method", "line": 2},
+        {"kind": "function", "name": "load", "line": 5},
+    ]
 
 
 def test_repeated_run_records_use_distinct_run_directories(capsys, tmp_path: Path) -> None:

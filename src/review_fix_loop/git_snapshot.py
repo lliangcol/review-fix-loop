@@ -5,8 +5,8 @@ import re
 # Git is executed locally with shell=False and fixed argv shapes.
 import subprocess  # nosec B404
 from pathlib import Path
-from typing import Any
 
+from .domain.types import JsonObject
 from .errors import GitError
 from .utils import (
     DEFAULT_FILE_HASH_LIMIT_BYTES,
@@ -20,6 +20,9 @@ from .utils import (
 
 SCOPES = ["merge_base_to_head", "staged", "unstaged", "untracked"]
 GIT_PATH_ARG_LIMIT_BYTES = 24000
+
+SnapshotEntry = JsonObject
+EntriesByScope = dict[str, list[SnapshotEntry]]
 
 
 def run_git(repo: Path, args: list[str], check: bool = True) -> subprocess.CompletedProcess[bytes]:
@@ -58,9 +61,9 @@ def git_path(repo: Path, name: str) -> Path:
     return path.resolve()
 
 
-def parse_name_status_z(data: bytes, scope: str) -> list[dict[str, Any]]:
+def parse_name_status_z(data: bytes, scope: str) -> list[SnapshotEntry]:
     tokens = [decode_git_path(token) for token in data.split(b"\0") if token]
-    entries: list[dict[str, Any]] = []
+    entries: list[SnapshotEntry] = []
     index = 0
     while index < len(tokens):
         status = tokens[index]
@@ -394,7 +397,7 @@ def count_text_lines(path: Path) -> int:
     return content.count(b"\n") + (0 if content.endswith((b"\n", b"\r")) else 1)
 
 
-def attach_untracked_ranges(file_path: Path, entry: dict[str, Any]) -> None:
+def attach_untracked_ranges(file_path: Path, entry: SnapshotEntry) -> None:
     if entry.get("deleted") or entry.get("binary") or entry.get("symlink"):
         entry["changed_lines"] = []
         entry["diff_context_lines"] = []
@@ -404,7 +407,7 @@ def attach_untracked_ranges(file_path: Path, entry: dict[str, Any]) -> None:
     entry["diff_context_lines"] = [[1, line_count]]
 
 
-def enrich_worktree_entry(repo: Path, entry: dict[str, Any]) -> None:
+def enrich_worktree_entry(repo: Path, entry: SnapshotEntry) -> None:
     path = entry["path"]
     file_path = repo / path
     if file_path.is_symlink():
@@ -431,7 +434,7 @@ def enrich_worktree_entry(repo: Path, entry: dict[str, Any]) -> None:
         entry["hash_truncated"] = True
 
 
-def collect_staged(repo: Path) -> list[dict[str, Any]]:
+def collect_staged(repo: Path) -> list[SnapshotEntry]:
     result = run_git(repo, ["diff", "--cached", "--name-status", "-z"])
     entries = parse_name_status_z(result.stdout, "staged")
     paths = [entry["path"] for entry in entries if not entry.get("deleted")]
@@ -454,7 +457,7 @@ def collect_staged(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def collect_unstaged(repo: Path) -> list[dict[str, Any]]:
+def collect_unstaged(repo: Path) -> list[SnapshotEntry]:
     result = run_git(repo, ["diff", "--name-status", "-z"])
     entries = parse_name_status_z(result.stdout, "unstaged")
     paths = [entry["path"] for entry in entries if not entry.get("deleted")]
@@ -467,14 +470,14 @@ def collect_unstaged(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def collect_untracked(repo: Path) -> list[dict[str, Any]]:
+def collect_untracked(repo: Path) -> list[SnapshotEntry]:
     result = run_git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])
     entries = []
     for token in result.stdout.split(b"\0"):
         if not token:
             continue
         path = normalize_repo_path(decode_git_path(token))
-        entry: dict[str, Any] = {
+        entry: SnapshotEntry = {
             "scope": "untracked",
             "status": "?",
             "status_kind": "?",
@@ -487,7 +490,7 @@ def collect_untracked(repo: Path) -> list[dict[str, Any]]:
     return entries
 
 
-def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, list[dict[str, Any]]]:
+def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, list[SnapshotEntry]]:
     if not baseline:
         raise GitError("merge_base_to_head scope requires a baseline")
     merge_base_result = run_git(repo, ["merge-base", baseline, "HEAD"])
@@ -516,8 +519,8 @@ def collect_merge_base_to_head(repo: Path, baseline: str | None) -> tuple[str, l
     return merge_base, entries
 
 
-def collect_scopes(repo: Path, mode: str, baseline: str | None, mode_scopes: list[str]) -> tuple[str | None, dict[str, list[dict[str, Any]]]]:
-    entries_by_scope: dict[str, list[dict[str, Any]]] = {scope: [] for scope in SCOPES}
+def collect_scopes(repo: Path, mode: str, baseline: str | None, mode_scopes: list[str]) -> tuple[str | None, EntriesByScope]:
+    entries_by_scope: EntriesByScope = {scope: [] for scope in SCOPES}
     merge_base = None
     if "merge_base_to_head" in mode_scopes:
         merge_base, entries_by_scope["merge_base_to_head"] = collect_merge_base_to_head(repo, baseline)
@@ -530,7 +533,7 @@ def collect_scopes(repo: Path, mode: str, baseline: str | None, mode_scopes: lis
     return merge_base, entries_by_scope
 
 
-def compute_scope_hashes(entries_by_scope: dict[str, list[dict[str, Any]]]) -> dict[str, str]:
+def compute_scope_hashes(entries_by_scope: EntriesByScope) -> dict[str, str]:
     hashes: dict[str, str] = {}
     for scope, entries in entries_by_scope.items():
         hashes[scope] = sha256_json(sorted(entries, key=lambda item: (item.get("path", ""), item.get("old_path", ""))))

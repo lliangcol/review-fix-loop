@@ -5,7 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from review_fix_loop.cli import main
+from review_fix_loop.errors import WorkflowError
+from review_fix_loop.run_record import build_run_record, update_run_record_after_gates, write_run_outputs
 
 
 def git(repo: Path, *args: str) -> None:
@@ -99,3 +103,75 @@ def test_skill_snapshot_wrapper_runs_from_source_tree(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     snapshot = json.loads(result.stdout)
     assert snapshot["must_reload"] == ["gates.json", "src/app.py"]
+
+
+def test_gate_run_record_update_rejects_path_outside_snapshot_dir(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    snapshot_path = run_root / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    outside_record = tmp_path / "other" / "run-record.json"
+    snapshot = {
+        "run_record_path": str(outside_record),
+    }
+
+    with pytest.raises(WorkflowError, match="run_record_path must stay under the snapshot directory"):
+        update_run_record_after_gates(snapshot, snapshot_path, [], [], 0)
+
+
+def test_gate_run_record_update_rejects_non_string_record_path(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    snapshot_path = run_root / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+    snapshot = {
+        "run_record_path": ["run-record.json"],
+    }
+
+    with pytest.raises(WorkflowError, match="run_record_path must be a string"):
+        update_run_record_after_gates(snapshot, snapshot_path, [], [], 0)
+
+
+def test_gate_run_record_update_returns_false_when_record_missing(tmp_path: Path) -> None:
+    run_root = tmp_path / "run"
+    run_root.mkdir()
+    snapshot_path = run_root / "snapshot.json"
+    snapshot_path.write_text("{}", encoding="utf-8")
+
+    updated = update_run_record_after_gates({}, snapshot_path, [], [], 0)
+
+    assert updated is False
+    assert not (run_root / "run-record.json").exists()
+
+
+def test_write_run_outputs_rejects_non_string_summary_list(tmp_path: Path) -> None:
+    snapshot = {
+        "mode": "normal_loop",
+        "pass": 1,
+        "snapshot_id": "sha256:test",
+        "config_sources": ["gates.json"],
+        "must_reload": ["src/app.py", 1],
+        "planned_gates": [],
+    }
+
+    with pytest.raises(WorkflowError, match="must_reload must be a list of strings"):
+        write_run_outputs(tmp_path / "run", snapshot, {"schema": 1}, {})
+
+    assert not (tmp_path / "run" / "snapshot.json").exists()
+
+
+def test_build_run_record_rejects_non_string_slice_list() -> None:
+    snapshot = {
+        "mode": "normal_loop",
+        "pass": 2,
+        "snapshot_id": "sha256:test",
+        "config_hash": "sha256:config",
+        "rule_hashes": {},
+        "scope_hashes": {},
+        "slice_hashes": {},
+        "reloaded_slices": ["source"],
+        "reused_slices": ["tests", 1],
+    }
+
+    with pytest.raises(WorkflowError, match="reused_slices must be a list of strings"):
+        build_run_record(snapshot, "run-id")

@@ -4,8 +4,8 @@ import copy
 import json
 import re
 from pathlib import Path
-from typing import Any
 
+from .domain.types import JsonObject
 from .errors import ConfigError
 from .gates import BUILTIN_GATE_COMMANDS, BUILTIN_PREFIX
 from .utils import normalize_repo_path, sha256_json, sha256_text
@@ -38,7 +38,11 @@ GATE_BOOLEAN_FIELDS = {
 }
 
 
-def load_json_file(path: Path) -> dict[str, Any]:
+ConfigData = JsonObject
+ConfigSourceInfo = JsonObject
+
+
+def load_json_file(path: Path) -> ConfigData:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -51,7 +55,7 @@ def load_json_file(path: Path) -> dict[str, Any]:
     return data
 
 
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+def deep_merge(base: ConfigData, override: ConfigData) -> ConfigData:
     result = copy.deepcopy(base)
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
@@ -67,7 +71,7 @@ def load_effective_config(
     cli_rule_files: list[str] | None = None,
     *,
     apply_local_override: bool = True,
-) -> tuple[dict[str, Any], str, dict[str, str], dict[str, Any]]:
+) -> tuple[ConfigData, str, dict[str, str], ConfigSourceInfo]:
     config = load_json_file(config_path)
     local_override = repo / ".review-fix-loop.local.json"
     local_override_available = local_override.exists()
@@ -92,7 +96,7 @@ def load_effective_config(
     validate_config(config)
     config_hash = sha256_json(config)
     rule_hashes = hash_rule_files(repo, normalized_rule_files)
-    source_info: dict[str, Any] = {
+    source_info: ConfigSourceInfo = {
         "config_sources": [str(config_path.resolve())],
         "local_override_applied": local_override_applied,
         "local_override_available": local_override_available,
@@ -116,7 +120,7 @@ def hash_rule_files(repo: Path, rule_files: list[str]) -> dict[str, str]:
     return hashes
 
 
-def validate_config(config: dict[str, Any]) -> None:
+def validate_config(config: ConfigData) -> None:
     if config.get("version") != 1:
         raise ConfigError("config version must be 1")
     modes = config.get("modes")

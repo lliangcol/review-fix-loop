@@ -4,13 +4,17 @@ import json
 import re
 # Parses bounded local gate output without adding runtime dependencies.
 import xml.etree.ElementTree as ET  # nosec B405
-from typing import Any
+
+from .domain.types import JsonObject
 
 SEVERITY_ORDER = {"none": 0, "info": 1, "warning": 2, "error": 3}
 VALID_DIAGNOSTIC_SEVERITIES = set(SEVERITY_ORDER)
 
+Diagnostic = JsonObject
+ParserConfig = JsonObject
 
-def normalize_severity(value: Any) -> str | None:
+
+def normalize_severity(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     normalized = value.strip().lower()
@@ -38,7 +42,7 @@ def normalize_diagnostic(
     column: int | None = None,
     rule: str | None = None,
     slice_id: str | None = None,
-) -> dict[str, Any]:
+) -> Diagnostic:
     return {
         "tool": tool,
         "severity": normalize_severity(severity) or severity,
@@ -56,12 +60,12 @@ def normalize_diagnostic(
 def invalid_severity_diagnostic(
     *,
     tool: str,
-    raw_severity: Any,
+    raw_severity: object,
     scope: str,
     blocking: bool,
     file: str | None = None,
     line: int | None = None,
-) -> dict[str, Any]:
+) -> Diagnostic:
     return normalize_diagnostic(
         tool=tool,
         severity="error",
@@ -74,7 +78,7 @@ def invalid_severity_diagnostic(
     )
 
 
-def _int_or_none(value: Any) -> int | None:
+def _int_or_none(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, str) and value.isdigit():
@@ -82,8 +86,8 @@ def _int_or_none(value: Any) -> int | None:
     return None
 
 
-def parse_git_diff_check(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
-    diagnostics: list[dict[str, Any]] = []
+def parse_git_diff_check(output: str, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
+    diagnostics: list[Diagnostic] = []
     for line_text in output.splitlines():
         match = re.match(r"^(?P<file>.*?):(?P<line>\d+):(?P<message>.*)$", line_text)
         if not match:
@@ -101,10 +105,10 @@ def parse_git_diff_check(output: str, gate_id: str, scope: str, blocking: bool) 
     return diagnostics
 
 
-def parse_regex_lines(output: str, parser: dict[str, Any], gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
+def parse_regex_lines(output: str, parser: ParserConfig, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
     pattern = re.compile(parser["pattern"])
     default_severity = parser.get("severity", "error")
-    diagnostics = []
+    diagnostics: list[Diagnostic] = []
     for line_text in output.splitlines():
         match = pattern.match(line_text)
         if not match:
@@ -136,7 +140,7 @@ def parse_regex_lines(output: str, parser: dict[str, Any], gate_id: str, scope: 
     return diagnostics
 
 
-def parse_json_diagnostics(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
+def parse_json_diagnostics(output: str, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
     if not output.strip():
         return []
     try:
@@ -160,7 +164,7 @@ def parse_json_diagnostics(output: str, gate_id: str, scope: str, blocking: bool
             scope=scope,
             blocking=blocking,
         )]
-    diagnostics = []
+    diagnostics: list[Diagnostic] = []
     for item in raw_items:
         if not isinstance(item, dict):
             continue
@@ -191,7 +195,7 @@ def parse_json_diagnostics(output: str, gate_id: str, scope: str, blocking: bool
     return diagnostics
 
 
-def parse_rdjson(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
+def parse_rdjson(output: str, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
     if not output.strip():
         return []
     try:
@@ -215,7 +219,7 @@ def parse_rdjson(output: str, gate_id: str, scope: str, blocking: bool) -> list[
             scope=scope,
             blocking=blocking,
         )]
-    diagnostics = []
+    diagnostics: list[Diagnostic] = []
     for item in raw_items:
         if not isinstance(item, dict):
             continue
@@ -251,7 +255,7 @@ def parse_rdjson(output: str, gate_id: str, scope: str, blocking: bool) -> list[
     return diagnostics
 
 
-def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
+def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
     if not output.strip():
         return []
     try:
@@ -268,7 +272,7 @@ def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[d
     runs = data.get("runs", []) if isinstance(data, dict) else []
     if not isinstance(runs, list):
         runs = []
-    diagnostics = []
+    diagnostics: list[Diagnostic] = []
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -278,7 +282,7 @@ def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[d
         for result in results:
             if not isinstance(result, dict):
                 continue
-            location: dict[str, Any] = {}
+            location: JsonObject = {}
             locations = result.get("locations", [])
             if isinstance(locations, list) and locations and isinstance(locations[0], dict):
                 location = locations[0].get("physicalLocation", {}) if isinstance(locations[0].get("physicalLocation"), dict) else {}
@@ -314,7 +318,7 @@ def parse_sarif(output: str, gate_id: str, scope: str, blocking: bool) -> list[d
     return diagnostics
 
 
-def parse_checkstyle(output: str, gate_id: str, scope: str, blocking: bool) -> list[dict[str, Any]]:
+def parse_checkstyle(output: str, gate_id: str, scope: str, blocking: bool) -> list[Diagnostic]:
     if not output.strip():
         return []
     try:
@@ -329,7 +333,7 @@ def parse_checkstyle(output: str, gate_id: str, scope: str, blocking: bool) -> l
             scope=scope,
             blocking=blocking,
         )]
-    diagnostics = []
+    diagnostics: list[Diagnostic] = []
     for file_node in root.findall(".//file"):
         file_name = file_node.attrib.get("name")
         for error_node in file_node.findall("error"):
