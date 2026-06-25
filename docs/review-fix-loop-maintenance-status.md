@@ -76,6 +76,8 @@ act as a GitHub App, or run as an automatic repair platform.
   `validate-config` and `validate-schema --schema gate-config`.
 - Documentation parity tests now check both English-to-Chinese and
   Chinese-to-English Markdown counterparts under `docs/`.
+- Local development documentation now uses the repository `.venv` path, which
+  avoids PEP 668 failures from externally managed global Python installs.
 
 ## Validation Commands
 
@@ -121,16 +123,16 @@ python -m pytest tests/test_gate_config.py -q
   output) are present in the checkout and must remain untracked.
 - GitHub branch protection, workflow green status, and PyPI/TestPyPI trusted
   publisher setup cannot be proven from the local checkout.
-- The active uv-managed Python environment rejects direct editable installs
-  with PEP 668 `externally-managed-environment`; use an isolated dev
-  environment before claiming full local release validation.
+- Direct editable installs against the active uv-managed global Python still
+  fail with PEP 668 `externally-managed-environment`; use
+  `.\.venv\Scripts\python.exe` for local validation.
 
 ## Backlog
 
-1. Document or script a PEP 668-compatible local dev bootstrap so `.[dev]`
-   tooling can run without `--break-system-packages`.
-2. Run full security and release validation in an environment with the declared
-   dev tools installed.
+1. Confirm GitHub Actions CI/security/release workflow status after the recent
+   local validation hardening reaches the remote.
+2. Configure or verify GitHub branch protection and PyPI/TestPyPI trusted
+   publisher setup outside the local checkout.
 3. Consider a stricter heading-structure parity check for paired English and
    Chinese docs if future docs drift appears.
 
@@ -140,17 +142,20 @@ python -m pytest tests/test_gate_config.py -q
   and bidirectional docs parity test rounds.
 - `python -m pytest tests/test_review_loop_contract.py -q`: passed (`9 passed`)
   after bidirectional docs counterpart coverage was added.
-- `PYTHONPATH=src python -m review_fix_loop.cli validate-config --repo . --config adapters/generic/gates.json --no-local-override`: passed.
+- `.\.venv\Scripts\python.exe -m pip install -e ".[dev]"`: passed.
+- `.\.venv\Scripts\python.exe -m pytest -q`: passed (`107 passed`).
+- `.\.venv\Scripts\python.exe -m pytest -q --cov=review_fix_loop --cov-branch --cov-report=term-missing`: passed (`107 passed`, total coverage `82%`).
+- `.\.venv\Scripts\python.exe -m ruff check src tests`: passed.
+- `.\.venv\Scripts\python.exe -m mypy src/review_fix_loop`: passed.
+- `.\.venv\Scripts\python.exe -m bandit -r src/review_fix_loop`: passed with no issues identified.
+- `.\.venv\Scripts\python.exe -m pip_audit`: passed with no known vulnerabilities; the local package itself was skipped because it is not published on PyPI.
+- `.\.venv\Scripts\python.exe -m build && .\.venv\Scripts\python.exe -m twine check dist/*`: passed.
+- `.\.venv\Scripts\python.exe -m review_fix_loop.cli validate-config --repo . --config adapters/generic/gates.json --no-local-override`: passed.
 - Fresh `snapshot --pass 1 --write-run-record` and `gate --ci-mode --no-local-override`
-  passed for the duplicate-key and docs parity rounds.
+  passed for the `.venv` bootstrap documentation round.
 - `git diff --check` and `git diff --cached --check`: passed.
-- `python -m pip install -e ".[dev]"`: failed because the active uv-managed
-  Python reports `externally-managed-environment` (PEP 668). No
-  `--break-system-packages` override was used.
-- `ruff`, `mypy`, `build`, `bandit`, `pip_audit`, and `pytest-cov` were not
-  available in the active Python environment during the recent rounds.
 
 ## Next Candidate
 
-Document or script a PEP 668-compatible local dev bootstrap path so the full
-`.[dev]` validation toolchain can run reliably on this Windows checkout.
+Check the remote GitHub Actions results for the recent commits and reconcile
+any CI/security/release differences from the local `.venv` validation.
