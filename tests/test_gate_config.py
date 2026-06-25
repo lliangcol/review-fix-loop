@@ -315,7 +315,7 @@ def test_diagnostic_schema_rejects_invalid_severity(capsys, tmp_path: Path) -> N
 
     assert code == 1
     assert result["valid"] is False
-    assert any("severity" in error and "fatal" in error for error in result["errors"]) or any(
+    assert any("'fatal' is not one of" in error for error in result["errors"]) or any(
         "field severity must be one of" in error for error in result["errors"]
     )
 
