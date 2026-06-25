@@ -82,6 +82,8 @@ act as a GitHub App, or run as an automatic repair platform.
   `validate-config` and `validate-schema --schema gate-config`.
 - Documentation parity tests now check both English-to-Chinese and
   Chinese-to-English Markdown counterparts under `docs/`.
+- Documentation parity tests now also check that paired English and Chinese
+  docs keep the same Markdown heading level structure.
 - Local development documentation now uses the repository `.venv` path, which
   avoids PEP 668 failures from externally managed global Python installs.
 - Remote GitHub Actions for commit `1c47d51` now match the local `.venv`
@@ -150,8 +152,8 @@ python -m pytest tests/test_gate_config.py -q
 
 1. Configure or verify GitHub branch protection and PyPI/TestPyPI trusted
    publisher setup outside the local checkout.
-2. Consider a stricter heading-structure parity check for paired English and
-   Chinese docs if future docs drift appears.
+2. None currently executable from this local checkout without authenticated
+   GitHub/PyPI owner-side settings access.
 
 ## Recent Validation
 
@@ -190,9 +192,11 @@ python -m pytest tests/test_gate_config.py -q
   and Security run `28144282373` passed.
 - GitHub Branch API check for `main`: `protected=false`.
 - PyPI/TestPyPI project JSON checks for `review-fix-loop`: both returned 404.
+- `.\.venv\Scripts\python.exe -m pytest tests/test_review_loop_contract.py -q`:
+  passed (`10 passed`) after adding Markdown heading-structure parity coverage
+  for paired English and Chinese docs.
 
 ## Next Candidate
 
 Enable branch protection required checks for `main` and configure PyPI/TestPyPI
-Trusted Publishing from authenticated owner-side settings, or continue with a
-small docs parity hardening pass if external settings access is not available.
+Trusted Publishing from authenticated owner-side settings.

@@ -82,3 +82,21 @@ review-fix-loop doctor --repo . --config review-fix-loop.gates.json
 
 常见人类可读错误可通过 `--locale zh-CN` 或
 `REVIEW_FIX_LOOP_LOCALE=zh-CN` 本地化；JSON key 保持英文不变。
+
+## 常见错误
+
+`--pass > 1 requires --previous-run-record`
+
+运行 pass 2 时传入上一轮的 `run-record.json`。
+
+`effective config hash differs from snapshot config_hash; create a fresh snapshot`
+
+snapshot 生成后 gate config 发生了变化。运行 gates 前先生成新的 snapshot。
+
+`rule file hashes differ from snapshot rule_hashes; create a fresh snapshot`
+
+配置的 rule file 在 snapshot 后发生了变化。复审前先生成新的 snapshot。
+
+`JSON file not found`
+
+检查 `snapshot_path` 或 `run_record_path`；run ID 会按时间戳写入所选 run root。

@@ -23,3 +23,8 @@
 ## 能和 Claude、Codex、Cursor、Aider 一起用吗？
 
 可以。它不绑定模型或编辑器。关键是要求 agent 在每次复审前读取 fresh snapshot。
+
+## 什么不应该提交？
+
+不要提交 workspace-local run records，例如 `.review-fix-loop/`、build output、
+caches 或 virtual environments。

@@ -44,6 +44,15 @@ def read_markdown_section_links(path: Path, heading: str) -> list[str]:
     return links
 
 
+def read_markdown_heading_levels(path: Path) -> list[int]:
+    levels: list[int] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^(#{1,6})\s+\S", line)
+        if match:
+            levels.append(len(match.group(1)))
+    return levels
+
+
 def test_contract_fixtures_exist() -> None:
     root = Path(__file__).resolve().parents[1] / "examples" / "contracts"
     expected = {
@@ -103,6 +112,18 @@ def test_docs_have_zh_cn_counterparts() -> None:
     for zh_doc in (docs_root / "zh-CN").glob("*.md"):
         english_doc = docs_root / zh_doc.name
         assert english_doc.exists(), f"missing English counterpart for zh-CN/{zh_doc.name}"
+
+
+def test_docs_zh_cn_counterparts_keep_heading_structure() -> None:
+    docs_root = Path(__file__).resolve().parents[1] / "docs"
+    exemptions = {"assets"}
+    for english_doc in docs_root.glob("*.md"):
+        if english_doc.stem in exemptions:
+            continue
+        zh_doc = docs_root / "zh-CN" / english_doc.name
+        assert read_markdown_heading_levels(zh_doc) == read_markdown_heading_levels(english_doc), (
+            f"heading structure differs for {english_doc.name}"
+        )
 
 
 def test_root_readme_documentation_links_are_paired() -> None:

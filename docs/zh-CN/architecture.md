@@ -47,3 +47,23 @@ gate 契约外，大多由 agent/skill 解释执行。
 
 JSON key、schema 字段和 artifact path 保持英文。常见人类可读错误可通过
 `--locale zh-CN` 或 `REVIEW_FIX_LOOP_LOCALE=zh-CN` 本地化。
+
+## Run Records 与脱敏
+
+设置 `--write-run-record` 后，run root 会写入：
+
+- `snapshot.json`
+- `run-record.json`
+- `gates.json`
+- `summary.md`
+
+run record 保存下一轮需要的 metadata：hash、planned gates、diagnostics、
+fixes、stop decision 和 residual risks。它避免保存完整源码、完整 diff、
+secrets 和未脱敏命令输出。gate argv、summary、diagnostics 和持久化的 config
+copy 在写盘前会先脱敏。
+
+## Runtime 边界
+
+核心包没有安装期依赖，通过本地 Python CLI 运行。adapter 提供项目专属的
+rule files、slices 和 gate commands。wheel 会打包内置 templates 和 schemas，
+因此安装后的 CLI 也能使用 `init` 和 `validate-schema`。
