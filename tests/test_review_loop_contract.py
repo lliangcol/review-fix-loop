@@ -100,6 +100,9 @@ def test_docs_have_zh_cn_counterparts() -> None:
             continue
         zh_doc = docs_root / "zh-CN" / english_doc.name
         assert zh_doc.exists(), f"missing zh-CN counterpart for {english_doc.name}"
+    for zh_doc in (docs_root / "zh-CN").glob("*.md"):
+        english_doc = docs_root / zh_doc.name
+        assert english_doc.exists(), f"missing English counterpart for zh-CN/{zh_doc.name}"
 
 
 def test_root_readme_documentation_links_are_paired() -> None:
