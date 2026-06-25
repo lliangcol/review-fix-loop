@@ -176,10 +176,11 @@ python -m pytest tests/test_gate_config.py -q
   without GitHub authentication, but the public job page reported the
   `macos-latest` migration warning, so the next round pinned the macOS CI
   runner label to `macos-15`.
+- GitHub Actions API check for commit `b3a20c1`: CI run `28144188537` passed
+  and Security run `28144188557` passed after pinning the macOS runner label.
 
 ## Next Candidate
 
 Verify branch protection and PyPI/TestPyPI trusted publisher configuration
 outside the local checkout, or continue with a small docs parity hardening pass
-if external settings access is not available. After the macOS runner pin reaches
-the remote, confirm the new CI run is green.
+if external settings access is not available.
