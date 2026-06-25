@@ -54,7 +54,7 @@ jobs:
         os:
           - ubuntu-latest
           - windows-latest
-          - macos-latest
+          - macos-15
         python-version:
           - "3.10"
           - "3.11"

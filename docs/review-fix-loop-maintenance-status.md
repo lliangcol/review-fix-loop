@@ -66,6 +66,9 @@ act as a GitHub App, or run as an automatic repair platform.
 - CI, security, and release workflows exist and align with the implementation
   plan at a high level: split lint/type/test/build/artifact hygiene jobs,
   Bandit/pip-audit/CodeQL/Dependency Review, and tag or TestPyPI release flow.
+- The CI matrix uses stable runner labels for the local package compatibility
+  contract: `ubuntu-latest`, `windows-latest`, and `macos-15` across Python
+  3.10-3.14.
 - English and Chinese remaining-work plans are structurally paired and both
   separate local completion criteria from external GitHub/PyPI verification.
 - Packaged schemas and skill reference schemas have matching filenames and
@@ -168,9 +171,15 @@ python -m pytest tests/test_gate_config.py -q
   push event as configured.
 - GitHub Actions API check for Release workflow: no run was present for
   `1c47d51`, matching the tag/manual trigger policy.
+- GitHub Actions API check for commit `d9264ae`: Security passed; CI failed
+  only on `test / macos-latest / Python 3.13`. Public logs were not available
+  without GitHub authentication, but the public job page reported the
+  `macos-latest` migration warning, so the next round pinned the macOS CI
+  runner label to `macos-15`.
 
 ## Next Candidate
 
 Verify branch protection and PyPI/TestPyPI trusted publisher configuration
 outside the local checkout, or continue with a small docs parity hardening pass
-if external settings access is not available.
+if external settings access is not available. After the macOS runner pin reaches
+the remote, confirm the new CI run is green.
