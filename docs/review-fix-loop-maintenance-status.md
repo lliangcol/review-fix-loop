@@ -59,8 +59,7 @@ act as a GitHub App, or run as an automatic repair platform.
 
 ## Current Audit Notes
 
-- Worktree started this round with many already staged source, test, and doc
-  changes. They are treated as pre-existing user work.
+- Current branch is `main` tracking `origin/main`.
 - `pyproject.toml` currently declares `dependencies = []`, matching the
   zero runtime dependency requirement.
 - CI, security, and release workflows exist and align with the implementation
@@ -73,6 +72,10 @@ act as a GitHub App, or run as an automatic repair platform.
 - The bundled generic adapter and packaged generic template had a duplicate
   `require_residual_risk_report` key in `large_merge`; this round removes the
   duplicate while preserving behavior.
+- Adapter/config JSON loading now rejects duplicate object keys through both
+  `validate-config` and `validate-schema --schema gate-config`.
+- Documentation parity tests now check both English-to-Chinese and
+  Chinese-to-English Markdown counterparts under `docs/`.
 
 ## Validation Commands
 
@@ -114,44 +117,40 @@ python -m pytest tests/test_gate_config.py -q
 
 ## Known Risks
 
-- Existing staged changes are broad and should be reviewed as their own batch
-  before release claims are made.
 - Local generated directories (`.review-fix-loop/`, `dist/`, caches, coverage
   output) are present in the checkout and must remain untracked.
 - GitHub branch protection, workflow green status, and PyPI/TestPyPI trusted
   publisher setup cannot be proven from the local checkout.
+- The active uv-managed Python environment rejects direct editable installs
+  with PEP 668 `externally-managed-environment`; use an isolated dev
+  environment before claiming full local release validation.
 
 ## Backlog
 
-1. Add an explicit duplicate-key guard for adapter JSON loading so future config
-   duplicates fail fast instead of relying on review.
-2. Add or strengthen docs parity checks for README and primary docs structure.
-3. Run full security and release validation after the current staged source
-   changes are understood and stabilized.
+1. Document or script a PEP 668-compatible local dev bootstrap so `.[dev]`
+   tooling can run without `--break-system-packages`.
+2. Run full security and release validation in an environment with the declared
+   dev tools installed.
+3. Consider a stricter heading-structure parity check for paired English and
+   Chinese docs if future docs drift appears.
 
 ## Recent Validation
 
+- `python -m pytest -q`: passed (`107 passed`) after the duplicate-key guard
+  and bidirectional docs parity test rounds.
+- `python -m pytest tests/test_review_loop_contract.py -q`: passed (`9 passed`)
+  after bidirectional docs counterpart coverage was added.
+- `PYTHONPATH=src python -m review_fix_loop.cli validate-config --repo . --config adapters/generic/gates.json --no-local-override`: passed.
+- Fresh `snapshot --pass 1 --write-run-record` and `gate --ci-mode --no-local-override`
+  passed for the duplicate-key and docs parity rounds.
+- `git diff --check` and `git diff --cached --check`: passed.
 - `python -m pip install -e ".[dev]"`: failed because the active uv-managed
   Python reports `externally-managed-environment` (PEP 668). No
   `--break-system-packages` override was used.
-- `git diff --check`: passed.
-- `git diff --cached --check`: passed.
-- `PYTHONPATH=src python -m review_fix_loop.cli validate-config --repo . --config adapters/generic/gates.json --no-local-override`: passed.
-- `python -m pytest tests/test_review_loop_contract.py -q`: initially failed
-  because this new English status file needed a `docs/zh-CN/` counterpart;
-  passed after adding the counterpart (`9 passed`).
-- `python -m pytest tests/test_gate_config.py::test_all_bundled_gate_configs_validate_against_schema -q`: not run because that test id does not exist.
-- `python -m pytest tests/test_gate_config.py::test_generic_adapter_matches_packaged_template tests/test_gate_config.py::test_packaged_adapter_configs_validate -q`: passed (`2 passed`).
-- `python -m pytest tests/test_gate_config.py -q`: failed with one pre-existing
-  live-worktree failure in `test_diagnostic_schema_rejects_invalid_severity`.
-  The current validator reports `field severity must be one of [...]`, while
-  the test still expects jsonschema-style `"'fatal' is not one of"` text.
-- `python -m ruff check ...`: not run because `ruff` is not installed in the
-  active Python environment.
-- `python -m mypy src/review_fix_loop`: not run because `mypy` is not installed
-  in the active Python environment.
+- `ruff`, `mypy`, `build`, `bandit`, `pip_audit`, and `pytest-cov` were not
+  available in the active Python environment during the recent rounds.
 
 ## Next Candidate
 
-Add a focused duplicate-key regression test for bundled adapter JSON files and
-the `init` template source, using only the standard library.
+Document or script a PEP 668-compatible local dev bootstrap path so the full
+`.[dev]` validation toolchain can run reliably on this Windows checkout.
